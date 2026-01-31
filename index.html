@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Firebase Firestore WebRTC Shooter</title>
+    <title>Firebase Firestore Shooter</title>
     <style>
         body {
             margin: 0;
@@ -19,17 +19,17 @@
             display: block;
         }
         
-        /* 接続メニュー用オーバーレイ */
+        /* メニューUI */
         #menuOverlay {
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            width: 80%;
+            width: 90%;
             max-width: 400px;
             background: rgba(0, 0, 0, 0.9);
-            padding: 30px;
-            border-radius: 15px;
+            padding: 25px;
+            border-radius: 12px;
             color: white;
             display: flex;
             flex-direction: column;
@@ -37,47 +37,69 @@
             border: 2px solid #555;
             box-shadow: 0 0 20px rgba(0,0,0,0.8);
             z-index: 100;
+            text-align: center;
         }
-        #menuOverlay h2 { margin: 0 0 10px 0; font-size: 20px; text-align: center; color: #00CCFF; }
+        #menuOverlay h2 { margin: 0; color: #00CCFF; font-size: 22px; }
+        
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            text-align: left;
+        }
+        label { font-size: 12px; color: #aaa; margin-left: 2px; }
         
         input {
             background: #333;
             border: 1px solid #666;
             color: #fff;
             padding: 10px;
-            border-radius: 5px;
+            border-radius: 6px;
             font-size: 16px;
+            outline: none;
             text-align: center;
         }
+        input:focus { border-color: #00CCFF; }
+
+        .btn-row {
+            display: flex;
+            gap: 10px;
+        }
+        
         button {
             padding: 12px;
-            background: #0077ff;
-            color: white;
             border: none;
-            border-radius: 5px;
+            border-radius: 6px;
             cursor: pointer;
             font-weight: bold;
             font-size: 16px;
-            transition: background 0.2s;
+            color: white;
+            transition: opacity 0.2s;
+            flex: 1;
         }
-        button:active { background: #0055cc; }
-        button#btnJoin { background: #00cc66; }
-        button#btnJoin:active { background: #009944; }
+        button:active { opacity: 0.8; }
         
-        .room-info {
-            text-align: center;
-            font-size: 24px;
+        #btnHost { background: #0077ff; }
+        #btnJoin { background: #00cc66; }
+
+        .room-display {
+            font-size: 32px;
             font-weight: bold;
             color: #FFFF00;
+            letter-spacing: 5px;
             margin: 10px 0;
-            letter-spacing: 2px;
+            background: #222;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px dashed #666;
         }
+        
         #statusMsg {
-            text-align: center;
-            color: #aaa;
-            font-size: 12px;
-            min-height: 1.2em;
+            color: #ccc;
+            font-size: 13px;
+            min-height: 1.5em;
         }
+
         .hidden { display: none !important; }
     </style>
 </head>
@@ -86,22 +108,34 @@
 <div id="menuOverlay">
     <h2>Multiplayer Shooter</h2>
     
-    <div id="menuStart">
-        <button id="btnCreate" style="width:100%">Create Room</button>
-        <div style="text-align:center; margin:10px 0; color:#888;">- OR -</div>
-        <div style="display:flex; gap:10px;">
-            <input type="number" id="roomIdInput" placeholder="Room ID" style="flex:1;">
-            <button id="btnJoin" style="flex:1;">Join</button>
+    <div class="input-group">
+        <label>Player Name</label>
+        <input type="text" id="username" value="Player1" placeholder="Enter Name">
+    </div>
+
+    <hr style="width:100%; border:0; border-top:1px solid #444; margin: 5px 0;">
+
+    <div id="menuMain">
+        <div class="input-group">
+            <label>Join Room (Enter 4-digit ID)</label>
+            <div style="display:flex; gap:10px;">
+                <input type="number" id="joinRoomId" placeholder="1234" style="flex:1;">
+                <button id="btnJoin" style="flex:1;">JOIN</button>
+            </div>
         </div>
+        
+        <div style="margin: 10px 0; font-size:12px; color:#666;">- OR -</div>
+        
+        <button id="btnHost" style="width:100%;">Create New Room (HOST)</button>
     </div>
 
     <div id="menuWaiting" class="hidden">
-        <div style="text-align:center; color:#ddd;">Room Created! Share this ID:</div>
-        <div id="roomDisplay" class="room-info">----</div>
-        <div style="text-align:center; font-size:12px; color:#888;">Waiting for opponent...</div>
+        <div style="color:#aaa;">Room ID</div>
+        <div id="displayRoomId" class="room-display">----</div>
+        <div style="font-size:12px; color:#888;">Waiting for opponent...</div>
     </div>
 
-    <div id="statusMsg">Ready to connect</div>
+    <div id="statusMsg">Ready</div>
 </div>
 
 <canvas id="gameCanvas"></canvas>
@@ -120,7 +154,7 @@
         addDoc 
     } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
 
-    // --- Firebase Configuration ---
+    // --- Firebase Config ---
     const firebaseConfig = {
       apiKey: "AIzaSyA8B-JtwDskK3omhjUCbjERHBZ6UDdm854",
       authDomain: "crownarena-1a321.firebaseapp.com",
@@ -131,13 +165,12 @@
       measurementId: "G-N9KDL9B9Y5"
     };
 
-    // Initialize Firebase
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
     /**
-     * NetworkManagerクラス
-     * Firestoreを使った自動シグナリング管理
+     * NetworkManager
+     * Firestoreを使った自動シグナリングクラス
      */
     class NetworkManager {
         constructor() {
@@ -150,13 +183,13 @@
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             };
 
-            // コールバック
+            // イベントコールバック
             this.onConnected = () => {};
             this.onMessage = (msg) => {};
             this.onStatusChange = (msg) => {};
         }
 
-        // 共通: PeerConnectionの初期化
+        // WebRTC共通初期化
         createPeerConnection() {
             this.pc = new RTCPeerConnection(this.config);
             
@@ -165,7 +198,7 @@
             };
         }
 
-        // DataChannelのセットアップ
+        // DataChannel設定
         setupDataChannel(channel) {
             this.dc = channel;
             this.dc.onopen = () => {
@@ -179,23 +212,23 @@
             };
         }
 
-        // ICE Candidateの収集とFirestoreへの保存
-        registerPeerConnectionListeners(localName, remoteName) {
-            // 自分のCandidateをFirestoreに保存
+        // ICE Candidateの収集と交換
+        collectIceCandidates(roomRef, localName, remoteName) {
+            const candidatesCollection = collection(roomRef, localName);
+
+            // 自分のCandidateをFirestoreに追加
             this.pc.onicecandidate = async (event) => {
                 if (event.candidate) {
-                    const candidatesCollection = collection(db, 'rooms', this.roomId, localName);
                     await addDoc(candidatesCollection, event.candidate.toJSON());
                 }
             };
 
-            // 相手のCandidateをFirestoreから取得
-            const candidatesCollection = collection(db, 'rooms', this.roomId, remoteName);
-            onSnapshot(candidatesCollection, (snapshot) => {
+            // 相手のCandidateを監視して追加
+            const remoteCandidatesCollection = collection(roomRef, remoteName);
+            onSnapshot(remoteCandidatesCollection, (snapshot) => {
                 snapshot.docChanges().forEach(async (change) => {
                     if (change.type === 'added') {
-                        const data = change.doc.data();
-                        const candidate = new RTCIceCandidate(data);
+                        const candidate = new RTCIceCandidate(change.doc.data());
                         try {
                             await this.pc.addIceCandidate(candidate);
                         } catch (e) {
@@ -206,51 +239,45 @@
             });
         }
 
-        // Hostとして部屋を作成
-        async createRoom() {
+        // Host処理
+        async startHost() {
             this.createPeerConnection();
             
             // HostがDataChannel作成
-            const channel = this.pc.createDataChannel("gameChannel");
+            const channel = this.pc.createDataChannel("game");
             this.setupDataChannel(channel);
 
-            // ルームID生成 (ランダム4桁)
+            // ランダム4桁ID生成
             this.roomId = Math.floor(1000 + Math.random() * 9000).toString();
-            
-            // Offer生成
+            const roomRef = doc(db, 'rooms', this.roomId);
+
+            // Offer作成
             const offer = await this.pc.createOffer();
             await this.pc.setLocalDescription(offer);
 
-            // Firestoreに部屋作成 (Offer保存)
-            const roomRef = doc(db, 'rooms', this.roomId);
-            const roomWithOffer = {
-                offer: {
-                    type: offer.type,
-                    sdp: offer.sdp
-                }
+            // ルーム作成
+            const roomData = {
+                offer: { type: offer.type, sdp: offer.sdp }
             };
-            await setDoc(roomRef, roomWithOffer);
+            await setDoc(roomRef, roomData);
 
-            this.onStatusChange(`Room ${this.roomId} created. Waiting...`);
+            // ICE交換開始 (Host: callerCandidates, Remote: calleeCandidates)
+            this.collectIceCandidates(roomRef, 'callerCandidates', 'calleeCandidates');
 
-            // ICE処理開始 (Hostは 'callerCandidates' に書き込み、'calleeCandidates' をリッスン)
-            this.registerPeerConnectionListeners('callerCandidates', 'calleeCandidates');
-
-            // Answer待ち (Joinerが参加するのを監視)
+            // Answer監視
             onSnapshot(roomRef, async (snapshot) => {
                 const data = snapshot.data();
                 if (!this.pc.currentRemoteDescription && data && data.answer) {
                     const answer = new RTCSessionDescription(data.answer);
                     await this.pc.setRemoteDescription(answer);
-                    this.onStatusChange("Connecting...");
                 }
             });
 
             return this.roomId;
         }
 
-        // Joinerとして部屋に参加
-        async joinRoom(roomId) {
+        // Join処理
+        async startJoin(roomId) {
             this.roomId = roomId;
             const roomRef = doc(db, 'rooms', roomId);
             const roomSnapshot = await getDoc(roomRef);
@@ -261,38 +288,31 @@
 
             this.createPeerConnection();
 
-            // JoinerはDataChannelを受け取る
+            // DataChannel受け取り
             this.pc.ondatachannel = (event) => {
                 this.setupDataChannel(event.channel);
             };
 
-            // Offer取得 & 設定
+            // Offer適用
             const offer = roomSnapshot.data().offer;
             await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
 
-            // Answer生成
+            // Answer作成
             const answer = await this.pc.createAnswer();
             await this.pc.setLocalDescription(answer);
 
-            // FirestoreにAnswer保存
-            const roomWithAnswer = {
-                answer: {
-                    type: answer.type,
-                    sdp: answer.sdp
-                }
-            };
-            await updateDoc(roomRef, roomWithAnswer);
+            // Answer保存
+            await updateDoc(roomRef, {
+                answer: { type: answer.type, sdp: answer.sdp }
+            });
 
-            // ICE処理開始 (Joinerは 'calleeCandidates' に書き込み、'callerCandidates' をリッスン)
-            this.registerPeerConnectionListeners('calleeCandidates', 'callerCandidates');
-
-            this.onStatusChange("Joining... Connecting to host.");
+            // ICE交換開始 (Join: calleeCandidates, Remote: callerCandidates)
+            this.collectIceCandidates(roomRef, 'calleeCandidates', 'callerCandidates');
         }
     }
 
-
     /**
-     * 既存のゲームクラス構造 (UI制御以外は変更なし)
+     * 既存ゲームロジック
      */
     class Vec2 {
         constructor(x, y) { this.x = x; this.y = y; }
@@ -536,40 +556,44 @@
         }
 
         setupMenuUI() {
-            const menuStart = document.getElementById('menuStart');
-            const menuWaiting = document.getElementById('menuWaiting');
-            const btnCreate = document.getElementById('btnCreate');
+            const btnHost = document.getElementById('btnHost');
             const btnJoin = document.getElementById('btnJoin');
-            const roomIdInput = document.getElementById('roomIdInput');
-            const roomDisplay = document.getElementById('roomDisplay');
+            const joinRoomId = document.getElementById('joinRoomId');
+            const displayRoomId = document.getElementById('displayRoomId');
+            const menuMain = document.getElementById('menuMain');
+            const menuWaiting = document.getElementById('menuWaiting');
 
-            // HOST処理
-            btnCreate.onclick = async () => {
-                btnCreate.disabled = true;
+            // HOST
+            btnHost.onclick = async () => {
+                this.network.onStatusChange('Creating Room...');
+                btnHost.disabled = true;
                 btnJoin.disabled = true;
-                const roomId = await this.network.createRoom();
                 
-                menuStart.classList.add('hidden');
+                const roomId = await this.network.startHost();
+                displayRoomId.innerText = roomId;
+                
+                menuMain.classList.add('hidden');
                 menuWaiting.classList.remove('hidden');
-                roomDisplay.innerText = roomId;
             };
 
-            // JOIN処理
+            // JOIN
             btnJoin.onclick = async () => {
-                const roomId = roomIdInput.value.trim();
+                const roomId = joinRoomId.value.trim();
                 if (roomId.length !== 4) {
-                    alert('Please enter a valid 4-digit Room ID.');
+                    alert('Please enter a 4-digit Room ID.');
                     return;
                 }
-                
-                btnCreate.disabled = true;
+                this.network.onStatusChange('Joining Room...');
+                btnHost.disabled = true;
                 btnJoin.disabled = true;
+
                 try {
-                    await this.network.joinRoom(roomId);
+                    await this.network.startJoin(roomId);
                 } catch (e) {
-                    alert('Error joining room: ' + e.message);
-                    btnCreate.disabled = false;
+                    alert('Error: ' + e.message);
+                    btnHost.disabled = false;
                     btnJoin.disabled = false;
+                    this.network.onStatusChange('Error joining room.');
                 }
             };
         }
@@ -671,6 +695,7 @@
         }
 
         drawUI() {
+            // ローカル関数として定義
             const drawBar = (player, x, y) => {
                 const width = 150, height = 15;
                 this.ctx.fillStyle = '#555'; this.ctx.fillRect(x, y, width, height);
@@ -678,9 +703,16 @@
                 this.ctx.fillStyle = player.id === 1 ? '#00CCFF' : '#00FF66';
                 this.ctx.fillRect(x, y, width * hpPercent, height);
                 this.ctx.strokeStyle = '#FFF'; this.ctx.strokeRect(x, y, width, height);
-                this.ctx.fillStyle = '#FFF'; this.ctx.font = '14px Arial'; ctx.textAlign = 'left';
+                
+                // === 【修正箇所】 ===
+                // 以前はここで `ctx.textAlign` と書いていたためエラーになっていました。
+                // this.ctx に修正しています。
+                this.ctx.fillStyle = '#FFF'; 
+                this.ctx.font = '14px Arial'; 
+                this.ctx.textAlign = 'left';
                 this.ctx.fillText(`P${player.id} Lives: ${Math.max(0, player.lives)}`, x, y + 30);
             };
+
             drawBar(this.p1, 20, 20);
             drawBar(this.p2, this.canvas.width - 170, 20);
 
