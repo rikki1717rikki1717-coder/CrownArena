@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WebRTC Shooter with Firebase</title>
+    <title>Firebase Firestore WebRTC Shooter</title>
     <style>
         body {
             margin: 0;
@@ -26,74 +26,101 @@
             left: 50%;
             transform: translate(-50%, -50%);
             width: 80%;
-            max-width: 600px;
-            background: rgba(0, 0, 0, 0.85);
-            padding: 20px;
-            border-radius: 10px;
+            max-width: 400px;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border-radius: 15px;
             color: white;
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 15px;
             border: 2px solid #555;
-            user-select: text;
-            -webkit-user-select: text;
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
             z-index: 100;
         }
-        #menuOverlay h2 { margin: 0 0 10px 0; font-size: 18px; text-align: center; }
-        .row { display: flex; gap: 10px; }
-        input, textarea {
+        #menuOverlay h2 { margin: 0 0 10px 0; font-size: 20px; text-align: center; color: #00CCFF; }
+        
+        input {
             background: #333;
             border: 1px solid #666;
             color: #fff;
-            padding: 5px;
-            border-radius: 4px;
-        }
-        textarea { height: 60px; resize: none; font-size: 10px; width: 100%; }
-        button {
             padding: 10px;
+            border-radius: 5px;
+            font-size: 16px;
+            text-align: center;
+        }
+        button {
+            padding: 12px;
             background: #0077ff;
             color: white;
             border: none;
-            border-radius: 4px;
+            border-radius: 5px;
             cursor: pointer;
-            flex: 1;
             font-weight: bold;
+            font-size: 16px;
+            transition: background 0.2s;
         }
         button:active { background: #0055cc; }
-        button.secondary { background: #444; }
-        label { font-size: 12px; color: #aaa; }
+        button#btnJoin { background: #00cc66; }
+        button#btnJoin:active { background: #009944; }
+        
+        .room-info {
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: #FFFF00;
+            margin: 10px 0;
+            letter-spacing: 2px;
+        }
+        #statusMsg {
+            text-align: center;
+            color: #aaa;
+            font-size: 12px;
+            min-height: 1.2em;
+        }
+        .hidden { display: none !important; }
     </style>
 </head>
 <body>
 
 <div id="menuOverlay">
-    <h2>WebRTC Manual Connection</h2>
+    <h2>Multiplayer Shooter</h2>
     
-    <input type="text" id="username" placeholder="Enter Name" value="Player">
-
-    <div class="row">
-        <button id="btnHost">1. Host Game</button>
-        <button id="btnJoin" class="secondary">2. Join Game</button>
+    <div id="menuStart">
+        <button id="btnCreate" style="width:100%">Create Room</button>
+        <div style="text-align:center; margin:10px 0; color:#888;">- OR -</div>
+        <div style="display:flex; gap:10px;">
+            <input type="number" id="roomIdInput" placeholder="Room ID" style="flex:1;">
+            <button id="btnJoin" style="flex:1;">Join</button>
+        </div>
     </div>
 
-    <label>Local SDP (Copy this to send):</label>
-    <textarea id="localSdp" readonly placeholder="Generated SDP will appear here..."></textarea>
+    <div id="menuWaiting" class="hidden">
+        <div style="text-align:center; color:#ddd;">Room Created! Share this ID:</div>
+        <div id="roomDisplay" class="room-info">----</div>
+        <div style="text-align:center; font-size:12px; color:#888;">Waiting for opponent...</div>
+    </div>
 
-    <label>Remote SDP (Paste received SDP here):</label>
-    <textarea id="remoteSdp" placeholder="Paste incoming SDP here..."></textarea>
-
-    <button id="btnConnectHost" style="background: #00cc66; display:none;">3. Connect (Host Only)</button>
-    
-    <div id="statusMsg" style="text-align: center; color: yellow; font-size: 12px;">Ready</div>
+    <div id="statusMsg">Ready to connect</div>
 </div>
 
 <canvas id="gameCanvas"></canvas>
 
 <script type="module">
-    // --- Firebase Configuration & Initialization ---
+    // --- Firebase Imports ---
     import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
-    import { getFirestore } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+    import { 
+        getFirestore, 
+        collection, 
+        doc, 
+        setDoc, 
+        getDoc, 
+        updateDoc, 
+        onSnapshot, 
+        addDoc 
+    } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
 
+    // --- Firebase Configuration ---
     const firebaseConfig = {
       apiKey: "AIzaSyA8B-JtwDskK3omhjUCbjERHBZ6UDdm854",
       authDomain: "crownarena-1a321.firebaseapp.com",
@@ -107,53 +134,44 @@
     // Initialize Firebase
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
-    console.log("Firebase initialized:", app.name);
-    // -----------------------------------------------
 
     /**
      * NetworkManagerクラス
-     * WebRTC DataChannelの手動シグナリング管理
+     * Firestoreを使った自動シグナリング管理
      */
     class NetworkManager {
         constructor() {
             this.pc = null;
             this.dc = null;
+            this.roomId = null;
             this.isConnected = false;
             
-            // 公開STUNサーバー（Google）を使用
             this.config = {
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             };
 
+            // コールバック
             this.onConnected = () => {};
             this.onMessage = (msg) => {};
             this.onStatusChange = (msg) => {};
         }
 
-        // 共通: PC作成とICECandidate収集完了待ち
+        // 共通: PeerConnectionの初期化
         createPeerConnection() {
             this.pc = new RTCPeerConnection(this.config);
-
-            this.pc.onicecandidate = (event) => {
-                if (event.candidate === null) {
-                    // 収集完了（手動コピペのため、完了まで待ってからSDPを表示する）
-                    const sdp = JSON.stringify(this.pc.localDescription);
-                    document.getElementById('localSdp').value = sdp;
-                    this.onStatusChange("SDP Generated! Copy 'Local SDP' and send to peer.");
-                }
-            };
-
+            
             this.pc.onconnectionstatechange = () => {
                 console.log("Connection State:", this.pc.connectionState);
             };
         }
 
+        // DataChannelのセットアップ
         setupDataChannel(channel) {
             this.dc = channel;
             this.dc.onopen = () => {
                 console.log("DataChannel OPEN");
                 this.isConnected = true;
-                this.onStatusChange("Connection Established!");
+                this.onStatusChange("Connected!");
                 this.onConnected();
             };
             this.dc.onmessage = (event) => {
@@ -161,54 +179,120 @@
             };
         }
 
-        // Hostとして開始
-        async startHost() {
+        // ICE Candidateの収集とFirestoreへの保存
+        registerPeerConnectionListeners(localName, remoteName) {
+            // 自分のCandidateをFirestoreに保存
+            this.pc.onicecandidate = async (event) => {
+                if (event.candidate) {
+                    const candidatesCollection = collection(db, 'rooms', this.roomId, localName);
+                    await addDoc(candidatesCollection, event.candidate.toJSON());
+                }
+            };
+
+            // 相手のCandidateをFirestoreから取得
+            const candidatesCollection = collection(db, 'rooms', this.roomId, remoteName);
+            onSnapshot(candidatesCollection, (snapshot) => {
+                snapshot.docChanges().forEach(async (change) => {
+                    if (change.type === 'added') {
+                        const data = change.doc.data();
+                        const candidate = new RTCIceCandidate(data);
+                        try {
+                            await this.pc.addIceCandidate(candidate);
+                        } catch (e) {
+                            console.error("Error adding ice candidate", e);
+                        }
+                    }
+                });
+            });
+        }
+
+        // Hostとして部屋を作成
+        async createRoom() {
             this.createPeerConnection();
-            // Host側がDataChannelを作成
+            
+            // HostがDataChannel作成
             const channel = this.pc.createDataChannel("gameChannel");
             this.setupDataChannel(channel);
 
+            // ルームID生成 (ランダム4桁)
+            this.roomId = Math.floor(1000 + Math.random() * 9000).toString();
+            
+            // Offer生成
             const offer = await this.pc.createOffer();
             await this.pc.setLocalDescription(offer);
-            this.onStatusChange("Generating Offer... Please wait.");
+
+            // Firestoreに部屋作成 (Offer保存)
+            const roomRef = doc(db, 'rooms', this.roomId);
+            const roomWithOffer = {
+                offer: {
+                    type: offer.type,
+                    sdp: offer.sdp
+                }
+            };
+            await setDoc(roomRef, roomWithOffer);
+
+            this.onStatusChange(`Room ${this.roomId} created. Waiting...`);
+
+            // ICE処理開始 (Hostは 'callerCandidates' に書き込み、'calleeCandidates' をリッスン)
+            this.registerPeerConnectionListeners('callerCandidates', 'calleeCandidates');
+
+            // Answer待ち (Joinerが参加するのを監視)
+            onSnapshot(roomRef, async (snapshot) => {
+                const data = snapshot.data();
+                if (!this.pc.currentRemoteDescription && data && data.answer) {
+                    const answer = new RTCSessionDescription(data.answer);
+                    await this.pc.setRemoteDescription(answer);
+                    this.onStatusChange("Connecting...");
+                }
+            });
+
+            return this.roomId;
         }
 
-        // Joinとして開始
-        async startJoin(offerStr) {
-            if (!offerStr) {
-                alert("Please paste the Host's SDP first.");
-                return;
+        // Joinerとして部屋に参加
+        async joinRoom(roomId) {
+            this.roomId = roomId;
+            const roomRef = doc(db, 'rooms', roomId);
+            const roomSnapshot = await getDoc(roomRef);
+
+            if (!roomSnapshot.exists()) {
+                throw new Error("Room not found");
             }
+
             this.createPeerConnection();
 
-            // Join側はDataChannelを受け取る
+            // JoinerはDataChannelを受け取る
             this.pc.ondatachannel = (event) => {
                 this.setupDataChannel(event.channel);
             };
 
-            const offer = JSON.parse(offerStr);
-            await this.pc.setRemoteDescription(offer);
-            
+            // Offer取得 & 設定
+            const offer = roomSnapshot.data().offer;
+            await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+            // Answer生成
             const answer = await this.pc.createAnswer();
             await this.pc.setLocalDescription(answer);
-            this.onStatusChange("Generating Answer... Please wait.");
-        }
 
-        // HostがAnswerを受け取って接続完了
-        async finalizeHost(answerStr) {
-            if (!answerStr) {
-                alert("Please paste the Joiner's SDP answer.");
-                return;
-            }
-            const answer = JSON.parse(answerStr);
-            await this.pc.setRemoteDescription(answer);
-            this.onStatusChange("Connecting...");
+            // FirestoreにAnswer保存
+            const roomWithAnswer = {
+                answer: {
+                    type: answer.type,
+                    sdp: answer.sdp
+                }
+            };
+            await updateDoc(roomRef, roomWithAnswer);
+
+            // ICE処理開始 (Joinerは 'calleeCandidates' に書き込み、'callerCandidates' をリッスン)
+            this.registerPeerConnectionListeners('calleeCandidates', 'callerCandidates');
+
+            this.onStatusChange("Joining... Connecting to host.");
         }
     }
 
 
     /**
-     * 既存のゲームクラス構造
+     * 既存のゲームクラス構造 (UI制御以外は変更なし)
      */
     class Vec2 {
         constructor(x, y) { this.x = x; this.y = y; }
@@ -245,7 +329,7 @@
         }
         setupEvents() {
             const handleTouch = (e, type) => {
-                if(e.target.tagName !== 'CANVAS') return; // UI操作を邪魔しない
+                if(e.target.tagName !== 'CANVAS') return;
                 e.preventDefault();
                 for (let i = 0; i < e.changedTouches.length; i++) {
                     const t = e.changedTouches[i];
@@ -452,33 +536,42 @@
         }
 
         setupMenuUI() {
-            const btnHost = document.getElementById('btnHost');
+            const menuStart = document.getElementById('menuStart');
+            const menuWaiting = document.getElementById('menuWaiting');
+            const btnCreate = document.getElementById('btnCreate');
             const btnJoin = document.getElementById('btnJoin');
-            const btnConnectHost = document.getElementById('btnConnectHost');
-            const localSdp = document.getElementById('localSdp');
-            const remoteSdp = document.getElementById('remoteSdp');
+            const roomIdInput = document.getElementById('roomIdInput');
+            const roomDisplay = document.getElementById('roomDisplay');
 
-            btnHost.onclick = () => {
-                this.network.startHost();
-                btnHost.disabled = true;
-                btnJoin.style.display = 'none';
-                btnConnectHost.style.display = 'block';
-            };
-
-            btnJoin.onclick = () => {
-                const offer = remoteSdp.value.trim();
-                if (!offer) { alert('Paste Host SDP first!'); return; }
-                this.network.startJoin(offer);
+            // HOST処理
+            btnCreate.onclick = async () => {
+                btnCreate.disabled = true;
                 btnJoin.disabled = true;
-                btnHost.style.display = 'none';
+                const roomId = await this.network.createRoom();
+                
+                menuStart.classList.add('hidden');
+                menuWaiting.classList.remove('hidden');
+                roomDisplay.innerText = roomId;
             };
 
-            btnConnectHost.onclick = () => {
-                const answer = remoteSdp.value.trim();
-                this.network.finalizeHost(answer);
+            // JOIN処理
+            btnJoin.onclick = async () => {
+                const roomId = roomIdInput.value.trim();
+                if (roomId.length !== 4) {
+                    alert('Please enter a valid 4-digit Room ID.');
+                    return;
+                }
+                
+                btnCreate.disabled = true;
+                btnJoin.disabled = true;
+                try {
+                    await this.network.joinRoom(roomId);
+                } catch (e) {
+                    alert('Error joining room: ' + e.message);
+                    btnCreate.disabled = false;
+                    btnJoin.disabled = false;
+                }
             };
-
-            localSdp.onclick = () => localSdp.select();
         }
 
         initGame() {
