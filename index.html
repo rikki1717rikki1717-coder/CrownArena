@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Firebase Shooter Debug Mode</title>
+    <title>Firestore Only Shooter</title>
     <style>
         body {
             margin: 0;
@@ -11,7 +11,7 @@
             overflow: hidden;
             background-color: #1a1a1a;
             color: white;
-            font-family: monospace; /* ログを見やすく */
+            font-family: monospace;
             touch-action: none;
             user-select: none;
         }
@@ -20,7 +20,7 @@
             display: block;
         }
 
-        /* UIオーバーレイ */
+        /* UI Overlay */
         #ui-layer {
             position: absolute;
             top: 0;
@@ -30,31 +30,27 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: flex-start;
+            justify-content: center;
             background: rgba(0, 0, 0, 0.9);
             z-index: 10;
-            padding-top: 50px;
-            box-sizing: border-box;
-            overflow-y: auto;
         }
 
         .panel {
             background: #2a2a2a;
-            padding: 20px;
-            border-radius: 8px;
+            padding: 30px;
+            border-radius: 12px;
             text-align: center;
             border: 1px solid #444;
+            width: 300px;
             max-width: 90%;
-            width: 350px;
-            margin-bottom: 20px;
         }
 
-        h1 { margin: 0 0 15px 0; font-size: 20px; color: #4dc3ff; }
-        
+        h1 { margin: 0 0 20px 0; color: #ff9800; font-size: 20px; }
+
         input {
             width: 100%;
-            padding: 10px;
-            margin-bottom: 10px;
+            padding: 12px;
+            margin-bottom: 15px;
             background: #333;
             border: 1px solid #555;
             color: white;
@@ -66,52 +62,39 @@
 
         button {
             width: 100%;
-            padding: 10px;
-            margin-bottom: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
             border: none;
             border-radius: 4px;
             font-size: 16px;
             font-weight: bold;
             cursor: pointer;
+            color: white;
         }
 
-        .btn-host { background: #0078d7; color: white; }
-        .btn-join { background: #107c10; color: white; }
+        .btn-host { background: #0078d7; }
+        .btn-join { background: #107c10; }
 
-        .room-code {
-            font-size: 28px;
+        #room-display {
+            font-size: 32px;
             font-weight: bold;
             color: #ffeb3b;
-            letter-spacing: 3px;
-            margin: 10px 0;
+            letter-spacing: 5px;
+            margin: 15px 0;
             background: #000;
             padding: 10px;
             border-radius: 4px;
         }
 
-        /* デバッグログ表示エリア */
-        #debug-console {
-            width: 90%;
-            height: 200px;
-            background: #000;
-            border: 1px solid #555;
-            font-size: 11px;
-            color: #0f0;
-            padding: 10px;
-            overflow-y: scroll;
-            text-align: left;
-            margin-top: 10px;
-            white-space: pre-wrap;
-        }
+        #status-msg { margin-top: 10px; color: #aaa; font-size: 12px; }
 
         /* HUD */
-        #game-hud {
+        #hud {
             position: absolute;
             top: 10px;
             left: 10px;
             pointer-events: none;
             font-size: 14px;
-            color: #fff;
             text-shadow: 1px 1px 2px black;
         }
     </style>
@@ -120,37 +103,37 @@
 
     <div id="ui-layer">
         <div class="panel" id="panel-menu">
-            <h1>Shooter Debug</h1>
-            <input type="text" id="input-name" value="Player" placeholder="Name">
+            <h1>Firestore Battle</h1>
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
-            <div style="margin: 5px 0; color: #666;">---</div>
-            <input type="number" id="input-room-id" placeholder="Room ID">
+            <div style="margin: 10px 0; color:#666;">- OR -</div>
+            <input type="number" id="input-room" placeholder="4-Digit Room ID">
             <button class="btn-join" id="btn-join">Join Room</button>
+            <div id="status-msg">Ready</div>
         </div>
 
-        <div class="panel" id="panel-waiting" style="display: none;">
-            <h1>Waiting...</h1>
-            <div class="room-code" id="display-room-id">----</div>
-            <div id="waiting-status" style="color:#aaa; font-size:12px;">Initializing...</div>
+        <div class="panel" id="panel-wait" style="display: none;">
+            <h1>Waiting for P2...</h1>
+            <div>Room ID:</div>
+            <div id="room-display">----</div>
+            <div style="font-size: 12px; color: #aaa;">Share this ID with your friend</div>
         </div>
-
-        <div id="debug-console">System Ready...</div>
     </div>
 
-    <div id="game-hud">
-        STATUS: <span id="connection-status" style="color:yellow;">Disconnected</span>
+    <div id="hud">
+        P1: <span id="hp-p1">100</span> | P2: <span id="hp-p2">100</span>
+        <br>
+        Room: <span id="hud-room">----</span>
     </div>
 
     <canvas id="gameCanvas"></canvas>
 
 <script type="module">
     // ---------------------------------------------------------
-    // 1. Firebase Config & Init
+    // 1. Firebase Config (Modular SDK v9/v10)
     // ---------------------------------------------------------
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { 
-        getFirestore, collection, doc, setDoc, getDoc, updateDoc, 
-        onSnapshot, addDoc 
+        getFirestore, doc, setDoc, updateDoc, onSnapshot, getDoc 
     } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -165,465 +148,401 @@
 
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
-
-    // ログヘルパー
-    const logConsole = document.getElementById('debug-console');
-    function log(msg) {
-        const time = new Date().toLocaleTimeString();
-        const line = `[${time}] ${msg}`;
-        console.log(line);
-        logConsole.textContent = line + "\n" + logConsole.textContent;
-    }
-    log("Firebase Initialized.");
+    console.log("Firebase initialized");
 
     // ---------------------------------------------------------
-    // 2. Network Manager (Strict Debugging)
+    // 2. Constants & Globals
     // ---------------------------------------------------------
-    class NetworkManager {
-        constructor() {
-            this.pc = null;
-            this.dc = null;
-            this.roomId = null;
-            this.isHost = false;
-            this.unsubscribe = null; // onSnapshot解除用
-
-            // 待機キュー
-            this.remoteCandidatesQueue = [];
-
-            this.rtcConfig = {
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-            };
-
-            // コールバック
-            this.onConnect = () => {};
-            this.onData = (data) => {};
-            this.onStatus = (msg) => {};
-        }
-
-        reset() {
-            if (this.pc) this.pc.close();
-            if (this.unsubscribe) this.unsubscribe();
-            this.pc = null;
-            this.dc = null;
-            this.remoteCandidatesQueue = [];
-        }
-
-        createPeerConnection() {
-            log("Creating RTCPeerConnection...");
-            this.pc = new RTCPeerConnection(this.rtcConfig);
-
-            this.pc.onconnectionstatechange = () => {
-                log(`WebRTC State: ${this.pc.connectionState}`);
-                if (this.pc.connectionState === 'connected') {
-                    this.onStatus("Connected!");
-                }
-            };
-            
-            this.pc.oniceconnectionstatechange = () => {
-                log(`ICE State: ${this.pc.iceConnectionState}`);
-            };
-        }
-
-        setupDataChannel(channel) {
-            this.dc = channel;
-            this.dc.onopen = () => {
-                log(">>> DataChannel OPEN! <<<");
-                this.onConnect();
-            };
-            this.dc.onmessage = (e) => {
-                try {
-                    const data = JSON.parse(e.data);
-                    this.onData(data);
-                } catch(err) {
-                    console.error(err);
-                }
-            };
-        }
-
-        send(data) {
-            if (this.dc && this.dc.readyState === 'open') {
-                this.dc.send(JSON.stringify(data));
-            }
-        }
-
-        // ICE Candidate 収集・保存・監視
-        async collectIceCandidates(roomRef, localName, remoteName) {
-            const localCol = collection(roomRef, localName);
-            const remoteCol = collection(roomRef, remoteName);
-
-            // ローカル候補が出たら保存
-            this.pc.onicecandidate = async (event) => {
-                if (event.candidate) {
-                    try {
-                        await addDoc(localCol, event.candidate.toJSON());
-                        log(`Sent ICE candidate to ${localName}`);
-                    } catch (e) {
-                        log(`Error sending ICE: ${e.message}`);
-                    }
-                }
-            };
-
-            // 相手の候補を監視
-            onSnapshot(remoteCol, (snapshot) => {
-                snapshot.docChanges().forEach(async (change) => {
-                    if (change.type === 'added') {
-                        const candidate = new RTCIceCandidate(change.doc.data());
-                        log(`Received ICE candidate from ${remoteName}`);
-                        
-                        if (!this.pc.remoteDescription) {
-                            log("Queueing ICE (RemoteDescription not set)");
-                            this.remoteCandidatesQueue.push(candidate);
-                        } else {
-                            await this.pc.addIceCandidate(candidate);
-                        }
-                    }
-                });
-            });
-        }
-
-        async processQueue() {
-            if (this.remoteCandidatesQueue.length > 0) {
-                log(`Processing ${this.remoteCandidatesQueue.length} queued ICE candidates`);
-                for (const candidate of this.remoteCandidatesQueue) {
-                    await this.pc.addIceCandidate(candidate);
-                }
-                this.remoteCandidatesQueue = [];
-            }
-        }
-
-        // --- HOST Logic ---
-        async createRoom() {
-            this.isHost = true;
-            this.reset();
-            this.createPeerConnection();
-
-            // DataChannel作成
-            const channel = this.pc.createDataChannel("game");
-            this.setupDataChannel(channel);
-
-            // Room ID
-            this.roomId = Math.floor(1000 + Math.random() * 9000).toString();
-            log(`Generated Room ID: ${this.roomId}`);
-            
-            const roomRef = doc(db, 'rooms', this.roomId);
-
-            // Offer作成
-            log("Creating Offer...");
-            const offer = await this.pc.createOffer();
-            await this.pc.setLocalDescription(offer);
-
-            // Firestore初期データ
-            // ユーザー指定の players 構造を明確にする
-            const roomData = {
-                offer: { type: offer.type, sdp: offer.sdp },
-                players: {
-                    host: { x: 100, y: 100, active: true },
-                    guest: null // まだいない
-                },
-                createdAt: new Date().toISOString()
-            };
-
-            try {
-                await setDoc(roomRef, roomData);
-                log("Room document created in Firestore.");
-            } catch (e) {
-                log(`Error creating room doc: ${e.message}`);
-                throw e;
-            }
-
-            // ICE処理開始
-            this.collectIceCandidates(roomRef, 'callerCandidates', 'calleeCandidates');
-
-            // 監視開始 (onSnapshot)
-            log("Start listening for Joiner...");
-            this.unsubscribe = onSnapshot(roomRef, async (snapshot) => {
-                log("onSnapshot fired on Room Doc");
-                const data = snapshot.data();
-                if (!data) return;
-
-                // ゲスト参加検知
-                if (data.players && data.players.guest && !this.guestJoinedLog) {
-                    log("Guest joined! (players.guest updated)");
-                    this.guestJoinedLog = true; // ログ重複防止
-                }
-
-                // Answer検知
-                if (!this.pc.currentRemoteDescription && data.answer) {
-                    log("Answer received! Setting Remote Description...");
-                    const answer = new RTCSessionDescription(data.answer);
-                    await this.pc.setRemoteDescription(answer);
-                    await this.processQueue();
-                    log("Remote Description Set. Connection should start.");
-                }
-            });
-
-            return this.roomId;
-        }
-
-        // --- JOIN Logic ---
-        async joinRoom(roomId) {
-            this.isHost = false;
-            this.roomId = roomId;
-            this.reset();
-            
-            log(`Joining Room: ${roomId}...`);
-            const roomRef = doc(db, 'rooms', roomId);
-
-            try {
-                const roomSnapshot = await getDoc(roomRef);
-                if (!roomSnapshot.exists()) {
-                    throw new Error("Room does not exist!");
-                }
-                log("Room found.");
-
-                this.createPeerConnection();
-
-                // DataChannel受信待機
-                this.pc.ondatachannel = (e) => {
-                    log("DataChannel received from Host.");
-                    this.setupDataChannel(e.channel);
-                };
-
-                // Guest情報書き込み (Hostに通知)
-                log("Registering as Guest...");
-                await updateDoc(roomRef, {
-                    "players.guest": { x: 300, y: 100, active: true }
-                });
-
-                // Offerセット
-                const data = roomSnapshot.data();
-                if (data.offer) {
-                    log("Setting Remote Description (Offer)...");
-                    await this.pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-                } else {
-                    throw new Error("No Offer in room!");
-                }
-
-                // Answer作成
-                log("Creating Answer...");
-                const answer = await this.pc.createAnswer();
-                await this.pc.setLocalDescription(answer);
-
-                // Answer保存
-                log("Sending Answer...");
-                await updateDoc(roomRef, {
-                    answer: { type: answer.type, sdp: answer.sdp }
-                });
-
-                // ICE開始
-                this.collectIceCandidates(roomRef, 'calleeCandidates', 'callerCandidates');
-                log("Join process completed. Waiting for connection...");
-
-            } catch (e) {
-                log(`Join Error: ${e.message}`);
-                throw e;
-            }
-        }
-    }
+    const CANVAS = document.getElementById('gameCanvas');
+    const CTX = CANVAS.getContext('2d');
+    
+    // Game Config
+    const PLAYER_RADIUS = 20;
+    const BULLET_RADIUS = 5;
+    const MOVE_SPEED = 5;
+    const BULLET_SPEED = 10;
+    const FIRE_RATE = 200; // ms
+    
+    // Network Config
+    const SYNC_INTERVAL = 100; // 100msごとにFirestore同期 (負荷軽減)
 
     // ---------------------------------------------------------
-    // 3. Game & UI Logic
+    // 3. Game Logic Class
     // ---------------------------------------------------------
     class Game {
         constructor() {
-            this.canvas = document.getElementById('gameCanvas');
-            this.ctx = this.canvas.getContext('2d');
-            this.resize();
+            this.roomId = null;
+            this.isHost = false; // P1 = Host, P2 = Guest
+            this.myId = null;    // 'p1' or 'p2'
+            
+            this.state = {
+                players: {
+                    p1: { x: 100, y: 100, hp: 100, lives: 3, isShooting: false, active: false },
+                    p2: { x: 300, y: 100, hp: 100, lives: 3, isShooting: false, active: false }
+                },
+                bullets: [], // [{x, y, vx, vy, owner}]
+                status: "waiting"
+            };
 
-            this.network = new NetworkManager();
-            
-            // プレイヤーデータ
-            this.localPlayer = { x: 100, y: 100, color: '#00ccff', id: 1 };
-            this.remotePlayer = { x: 300, y: 100, color: '#00ff00', id: 2 };
-            
-            this.input = { x: 0, y: 0 };
-            this.stickBase = { x: 100, y: 0 };
+            // Input
+            this.input = { x: 0, y: 0, fire: false };
             this.touchId = null;
+            this.stickBase = { x: 100, y: 300 };
+            
+            // Timers
+            this.lastSyncTime = 0;
+            this.lastFireTime = 0;
 
-            // UI
-            this.uiLayer = document.getElementById('ui-layer');
-            this.panelMenu = document.getElementById('panel-menu');
-            this.panelWaiting = document.getElementById('panel-waiting');
-            this.hudStatus = document.getElementById('connection-status');
-            this.displayRoomId = document.getElementById('display-room-id');
-            this.waitingStatus = document.getElementById('waiting-status');
-
+            this.resize();
             window.addEventListener('resize', () => this.resize());
-            this.setupUI();
-            this.setupTouch();
+            this.setupInputs();
+            
+            // UI References
+            this.uiMenu = document.getElementById('panel-menu');
+            this.uiWait = document.getElementById('panel-wait');
+            this.uiLayer = document.getElementById('ui-layer');
+            this.statusMsg = document.getElementById('status-msg');
+            
+            this.bindButtons();
 
-            // ループ開始
+            // Start Loop
             requestAnimationFrame((t) => this.loop(t));
         }
 
         resize() {
-            this.canvas.width = window.innerWidth;
-            this.canvas.height = window.innerHeight;
-            this.stickBase = { x: 120, y: this.canvas.height - 120 };
+            CANVAS.width = window.innerWidth;
+            CANVAS.height = window.innerHeight;
+            this.stickBase = { x: 120, y: CANVAS.height - 120 };
         }
 
-        setupUI() {
-            // イベントバインド
-            this.network.onConnect = () => {
-                log("Game Connected! Hiding UI.");
-                this.hudStatus.innerText = "CONNECTED";
-                this.hudStatus.style.color = "#00ff00";
-                
-                // UI非表示アニメーション
-                this.uiLayer.style.transition = "opacity 0.5s";
-                this.uiLayer.style.opacity = "0";
-                setTimeout(() => { this.uiLayer.style.display = "none"; }, 500);
-            };
+        // --- Network Actions ---
 
-            this.network.onStatus = (msg) => {
-                this.waitingStatus.innerText = msg;
-            };
-
-            this.network.onData = (data) => {
-                if (data.type === 'move') {
-                    this.remotePlayer.x = data.x;
-                    this.remotePlayer.y = data.y;
-                }
-            };
-
-            // ボタン動作
-            document.getElementById('btn-create').onclick = async () => {
-                try {
-                    const roomId = await this.network.createRoom();
-                    this.localPlayer.id = 1; this.localPlayer.color = '#00ccff';
-                    this.displayRoomId.innerText = roomId;
-                    this.panelMenu.style.display = 'none';
-                    this.panelWaiting.style.display = 'block';
-                    this.waitingStatus.innerText = "Waiting for player...";
-                } catch (e) {
-                    alert("Create Failed: " + e);
-                }
-            };
-
-            document.getElementById('btn-join').onclick = async () => {
-                const id = document.getElementById('input-room-id').value;
-                if (!id || id.length !== 4) return alert("Invalid Room ID");
-                
-                try {
-                    this.localPlayer.id = 2; this.localPlayer.color = '#00ff00';
-                    this.waitingStatus.innerText = "Connecting...";
-                    this.panelMenu.style.display = 'none';
-                    this.panelWaiting.style.display = 'block';
-                    this.displayRoomId.innerText = id;
-                    
-                    await this.network.joinRoom(id);
-                } catch (e) {
-                    alert("Join Failed: " + e);
-                    this.panelMenu.style.display = 'block';
-                    this.panelWaiting.style.display = 'none';
-                }
-            };
-        }
-
-        setupTouch() {
-            const getTouch = (e) => {
-                for(let i=0; i<e.changedTouches.length; i++) {
-                    if(e.changedTouches[i].clientX < this.canvas.width/2) return e.changedTouches[i];
-                }
-                return null;
-            };
-
-            this.canvas.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                const t = getTouch(e);
-                if (t && this.touchId === null) {
-                    this.touchId = t.identifier;
-                    this.updateInput(t.clientX, t.clientY);
-                }
-            }, {passive:false});
-
-            this.canvas.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-                for(let i=0; i<e.changedTouches.length; i++) {
-                    if(e.changedTouches[i].identifier === this.touchId) {
-                        this.updateInput(e.changedTouches[i].clientX, e.changedTouches[i].clientY);
-                    }
-                }
-            }, {passive:false});
-
-            this.canvas.addEventListener('touchend', (e) => {
-                e.preventDefault();
-                for(let i=0; i<e.changedTouches.length; i++) {
-                    if(e.changedTouches[i].identifier === this.touchId) {
-                        this.touchId = null;
-                        this.input = {x:0, y:0};
-                    }
-                }
-            }, {passive:false});
-        }
-
-        updateInput(tx, ty) {
-            const max = 50;
-            let dx = tx - this.stickBase.x;
-            let dy = ty - this.stickBase.y;
-            const dist = Math.hypot(dx, dy);
-            if (dist > max) { dx = (dx/dist)*max; dy = (dy/dist)*max; }
-            this.input.x = dx/max;
-            this.input.y = dy/max;
-        }
-
-        update() {
-            // 移動
-            const speed = 5;
-            this.localPlayer.x += this.input.x * speed;
-            this.localPlayer.y += this.input.y * speed;
+        async createRoom() {
+            this.roomId = Math.floor(1000 + Math.random() * 9000).toString();
+            this.isHost = true;
+            this.myId = 'p1';
             
-            // 制限
-            const r = 20;
-            this.localPlayer.x = Math.max(r, Math.min(this.canvas.width-r, this.localPlayer.x));
-            this.localPlayer.y = Math.max(r, Math.min(this.canvas.height-r, this.localPlayer.y));
+            const initialData = {
+                players: {
+                    p1: { ...this.state.players.p1, active: true },
+                    p2: { ...this.state.players.p2, active: false }
+                },
+                bullets: [],
+                status: "waiting"
+            };
 
-            // 送信
-            this.network.send({
-                type: 'move',
-                x: this.localPlayer.x,
-                y: this.localPlayer.y
+            await setDoc(doc(db, "rooms", this.roomId), initialData);
+            
+            this.uiMenu.style.display = 'none';
+            this.uiWait.style.display = 'block';
+            document.getElementById('room-display').innerText = this.roomId;
+            document.getElementById('hud-room').innerText = this.roomId;
+
+            this.subscribeToRoom();
+        }
+
+        async joinRoom(id) {
+            const docRef = doc(db, "rooms", id);
+            const snap = await getDoc(docRef);
+            
+            if (!snap.exists()) {
+                alert("Room not found!");
+                return;
+            }
+
+            this.roomId = id;
+            this.isHost = false;
+            this.myId = 'p2';
+
+            // P2 Active化
+            await updateDoc(docRef, {
+                "players.p2.active": true,
+                "status": "playing"
+            });
+
+            this.uiMenu.style.display = 'none';
+            this.uiLayer.style.display = 'none';
+            document.getElementById('hud-room').innerText = this.roomId;
+
+            this.subscribeToRoom();
+        }
+
+        subscribeToRoom() {
+            onSnapshot(doc(db, "rooms", this.roomId), (doc) => {
+                if (!doc.exists()) return;
+                const data = doc.data();
+                
+                // --- Sync Logic ---
+                // 自分のデータは上書きせず、相手のデータと共有データ(弾、HP)を取り込む
+
+                if (this.isHost) {
+                    // Host (P1) は P2の「位置」と「操作」だけ受け取る
+                    // HPや弾は自分が計算して書き込む側なので、Firestoreからは読まない（上書き防止）
+                    if (data.players.p2) {
+                        this.state.players.p2.x = data.players.p2.x;
+                        this.state.players.p2.y = data.players.p2.y;
+                        this.state.players.p2.isShooting = data.players.p2.isShooting;
+                        this.state.players.p2.active = data.players.p2.active;
+                    }
+                } else {
+                    // Guest (P2) は P1の全データ と 弾 と 自分のHP/Lives (Hostが計算) を受け取る
+                    if (data.players.p1) this.state.players.p1 = data.players.p1;
+                    if (data.bullets) this.state.bullets = data.bullets;
+                    // 自分のHPはHostが管理しているので同期する
+                    if (data.players.p2) {
+                        this.state.players.p2.hp = data.players.p2.hp;
+                        this.state.players.p2.lives = data.players.p2.lives;
+                    }
+                    if (data.status === "playing") {
+                        this.uiLayer.style.display = 'none';
+                    }
+                }
+                
+                // HUD更新
+                document.getElementById('hp-p1').innerText = this.state.players.p1.hp;
+                document.getElementById('hp-p2').innerText = this.state.players.p2.hp;
+            });
+        }
+
+        async syncToFirestore() {
+            if (!this.roomId) return;
+            const ref = doc(db, "rooms", this.roomId);
+
+            try {
+                if (this.isHost) {
+                    // Hostは P1位置, P1操作, 全弾丸, 全HP を書き込む
+                    // Dot notationで必要な部分だけ更新
+                    await updateDoc(ref, {
+                        "players.p1": this.state.players.p1,
+                        "players.p2.hp": this.state.players.p2.hp, // Host権限でHP更新
+                        "players.p2.lives": this.state.players.p2.lives,
+                        "bullets": this.state.bullets
+                    });
+                } else {
+                    // Guestは P2位置, P2操作 のみを書き込む (active維持)
+                    await updateDoc(ref, {
+                        "players.p2.x": this.state.players.p2.x,
+                        "players.p2.y": this.state.players.p2.y,
+                        "players.p2.isShooting": this.state.players.p2.isShooting
+                    });
+                }
+            } catch (e) {
+                console.error("Sync Error:", e);
+            }
+        }
+
+        // --- Game Loop ---
+
+        update(dt) {
+            // 1. 自分の移動更新
+            const me = this.state.players[this.myId];
+            me.x += this.input.x * MOVE_SPEED;
+            me.y += this.input.y * MOVE_SPEED;
+            // 画面外制限
+            me.x = Math.max(20, Math.min(CANVAS.width - 20, me.x));
+            me.y = Math.max(20, Math.min(CANVAS.height - 20, me.y));
+
+            // 射撃フラグ更新
+            me.isShooting = this.input.fire;
+
+            // 2. Hostのみが実行する処理 (弾の生成・移動・衝突)
+            if (this.isHost) {
+                this.hostGameLogic();
+            }
+
+            // 3. 定期的なネットワーク同期
+            const now = Date.now();
+            if (now - this.lastSyncTime > SYNC_INTERVAL) {
+                this.syncToFirestore();
+                this.lastSyncTime = now;
+            }
+        }
+
+        hostGameLogic() {
+            // 弾の生成 (P1 & P2)
+            ['p1', 'p2'].forEach(pid => {
+                const p = this.state.players[pid];
+                if (p.active && p.isShooting) {
+                    // シンプルな連射制限
+                    // 注: 本格的には各プレイヤーごとのLastFireが必要だが、ここでは簡易化
+                    // 乱数でバラけさせるか、確率で生成して連射速度っぽくする
+                    if (Math.random() < 0.1) { // 約 6発/秒
+                        let vx = 0, vy = 0;
+                        if (pid === 'p1') vx = BULLET_SPEED; // P1は右へ
+                        else vx = -BULLET_SPEED;             // P2は左へ
+                        
+                        this.state.bullets.push({
+                            x: p.x, y: p.y, vx: vx, vy: 0, owner: pid
+                        });
+                    }
+                }
+            });
+
+            // 弾の移動 & 削除
+            this.state.bullets.forEach(b => {
+                b.x += b.vx;
+                b.y += b.vy;
+            });
+            // 画面外削除
+            this.state.bullets = this.state.bullets.filter(b => 
+                b.x > 0 && b.x < CANVAS.width && b.y > 0 && b.y < CANVAS.height
+            );
+
+            // 当たり判定 (Server Authority)
+            this.state.bullets = this.state.bullets.filter(b => {
+                let hit = false;
+                // ターゲット特定
+                const targetId = b.owner === 'p1' ? 'p2' : 'p1';
+                const target = this.state.players[targetId];
+
+                if (target.active && target.lives > 0) {
+                    const dx = b.x - target.x;
+                    const dy = b.y - target.y;
+                    if (Math.hypot(dx, dy) < PLAYER_RADIUS + BULLET_RADIUS) {
+                        hit = true;
+                        target.hp -= 10;
+                        if (target.hp <= 0) {
+                            target.hp = 100;
+                            target.lives--;
+                        }
+                    }
+                }
+                return !hit; // 当たったら消える
             });
         }
 
         draw() {
-            this.ctx.fillStyle = '#1a1a1a';
-            this.ctx.fillRect(0,0,this.canvas.width,this.canvas.height);
+            // BG
+            CTX.fillStyle = '#222';
+            CTX.fillRect(0, 0, CANVAS.width, CANVAS.height);
 
-            const drawP = (p) => {
-                this.ctx.beginPath();
-                this.ctx.arc(p.x, p.y, 20, 0, Math.PI*2);
-                this.ctx.fillStyle = p.color;
-                this.ctx.fill();
-                this.ctx.strokeStyle = '#fff';
-                this.ctx.lineWidth = 2;
-                this.ctx.stroke();
-            };
+            // Players
+            ['p1', 'p2'].forEach(pid => {
+                const p = this.state.players[pid];
+                if (!p.active) return;
+                
+                CTX.beginPath();
+                CTX.arc(p.x, p.y, PLAYER_RADIUS, 0, Math.PI*2);
+                CTX.fillStyle = pid === 'p1' ? '#00ccff' : '#00ff00';
+                CTX.fill();
+                
+                // HP Bar
+                CTX.fillStyle = 'red';
+                CTX.fillRect(p.x - 20, p.y - 35, 40, 5);
+                CTX.fillStyle = '#0f0';
+                CTX.fillRect(p.x - 20, p.y - 35, 40 * (p.hp/100), 5);
+            });
 
-            drawP(this.localPlayer);
-            drawP(this.remotePlayer);
+            // Bullets
+            CTX.fillStyle = '#ffeb3b';
+            this.state.bullets.forEach(b => {
+                CTX.beginPath();
+                CTX.arc(b.x, b.y, BULLET_RADIUS, 0, Math.PI*2);
+                CTX.fill();
+            });
 
-            // Stick
-            this.ctx.beginPath();
-            this.ctx.arc(this.stickBase.x, this.stickBase.y, 50, 0, Math.PI*2);
-            this.ctx.fillStyle = 'rgba(255,255,255,0.1)';
-            this.ctx.fill();
-            this.ctx.beginPath();
-            this.ctx.arc(this.stickBase.x + this.input.x*50, this.stickBase.y + this.input.y*50, 25, 0, Math.PI*2);
-            this.ctx.fillStyle = 'rgba(255,255,255,0.5)';
-            this.ctx.fill();
+            // Stick (UI)
+            CTX.beginPath();
+            CTX.arc(this.stickBase.x, this.stickBase.y, 50, 0, Math.PI*2);
+            CTX.strokeStyle = 'rgba(255,255,255,0.3)';
+            CTX.lineWidth = 2;
+            CTX.stroke();
+            
+            CTX.beginPath();
+            CTX.arc(this.stickBase.x + this.input.x*50, this.stickBase.y + this.input.y*50, 25, 0, Math.PI*2);
+            CTX.fillStyle = 'rgba(255,255,255,0.5)';
+            CTX.fill();
+            
+            // Fire Button (Right side)
+            const fireX = CANVAS.width - 100;
+            const fireY = CANVAS.height - 120;
+            CTX.beginPath();
+            CTX.arc(fireX, fireY, 40, 0, Math.PI*2);
+            CTX.fillStyle = this.input.fire ? 'rgba(255,0,0,0.6)' : 'rgba(255,0,0,0.3)';
+            CTX.fill();
+            CTX.strokeStyle = 'white';
+            CTX.stroke();
+            CTX.fillStyle = 'white';
+            CTX.font = '14px Arial';
+            CTX.textAlign = 'center';
+            CTX.fillText("FIRE", fireX, fireY + 5);
         }
 
-        loop() {
+        loop(timestamp) {
             this.update();
             this.draw();
-            requestAnimationFrame(() => this.loop());
+            requestAnimationFrame((t) => this.loop(t));
+        }
+
+        // --- Inputs ---
+        bindButtons() {
+            document.getElementById('btn-create').onclick = () => this.createRoom();
+            document.getElementById('btn-join').onclick = () => {
+                const id = document.getElementById('input-room').value;
+                if(id.length === 4) this.joinRoom(id);
+                else alert("Enter 4 digits");
+            };
+        }
+
+        setupInputs() {
+            const handleTouch = (e) => {
+                e.preventDefault();
+                const touches = e.changedTouches;
+                for (let i = 0; i < touches.length; i++) {
+                    const t = touches[i];
+                    
+                    // Left Stick
+                    if (t.clientX < CANVAS.width / 2) {
+                        this.touchId = t.identifier;
+                        const dx = t.clientX - this.stickBase.x;
+                        const dy = t.clientY - this.stickBase.y;
+                        const dist = Math.hypot(dx, dy);
+                        const max = 50;
+                        
+                        if (dist > max) {
+                            this.input.x = (dx / dist);
+                            this.input.y = (dy / dist);
+                        } else {
+                            this.input.x = dx / max;
+                            this.input.y = dy / max;
+                        }
+                    } 
+                    // Right Fire Button
+                    else {
+                        const fireX = CANVAS.width - 100;
+                        const fireY = CANVAS.height - 120;
+                        const dist = Math.hypot(t.clientX - fireX, t.clientY - fireY);
+                        if (dist < 60) {
+                            this.input.fire = true;
+                        }
+                    }
+                }
+            };
+
+            const handleEnd = (e) => {
+                e.preventDefault();
+                const touches = e.changedTouches;
+                for (let i = 0; i < touches.length; i++) {
+                    const t = touches[i];
+                    if (t.identifier === this.touchId) {
+                        this.input.x = 0;
+                        this.input.y = 0;
+                        this.touchId = null;
+                    }
+                    if (t.clientX > CANVAS.width / 2) {
+                        this.input.fire = false;
+                    }
+                }
+            };
+
+            CANVAS.addEventListener('touchstart', handleTouch, {passive: false});
+            CANVAS.addEventListener('touchmove', handleTouch, {passive: false});
+            CANVAS.addEventListener('touchend', handleEnd, {passive: false});
         }
     }
 
-    // Start
+    // Init
     window.onload = () => new Game();
-
 </script>
 </body>
 </html>
