@@ -3,251 +3,277 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Firebase Firestore Shooter</title>
+    <title>Firebase Shooter V10 Stable</title>
     <style>
         body {
             margin: 0;
             padding: 0;
             overflow: hidden;
-            background-color: #222;
-            touch-action: none;
-            font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none; /* スマホでのスクロール無効化 */
             user-select: none;
-            -webkit-user-select: none;
         }
+
         canvas {
             display: block;
         }
-        
-        /* メニューUI */
-        #menuOverlay {
+
+        /* UIオーバーレイ */
+        #ui-layer {
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 90%;
-            max-width: 400px;
-            background: rgba(0, 0, 0, 0.9);
-            padding: 25px;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 10;
+            transition: opacity 0.5s;
+        }
+
+        .panel {
+            background: #2a2a2a;
+            padding: 30px;
             border-radius: 12px;
-            color: white;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-            border: 2px solid #555;
-            box-shadow: 0 0 20px rgba(0,0,0,0.8);
-            z-index: 100;
             text-align: center;
+            border: 1px solid #444;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            max-width: 90%;
+            width: 320px;
         }
-        #menuOverlay h2 { margin: 0; color: #00CCFF; font-size: 22px; }
-        
-        .input-group {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            text-align: left;
-        }
-        label { font-size: 12px; color: #aaa; margin-left: 2px; }
+
+        h1 { margin: 0 0 20px 0; font-size: 24px; color: #4dc3ff; }
         
         input {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 15px;
             background: #333;
-            border: 1px solid #666;
-            color: #fff;
-            padding: 10px;
+            border: 1px solid #555;
+            color: white;
             border-radius: 6px;
+            box-sizing: border-box;
             font-size: 16px;
-            outline: none;
             text-align: center;
         }
-        input:focus { border-color: #00CCFF; }
 
-        .btn-row {
-            display: flex;
-            gap: 10px;
-        }
-        
         button {
+            width: 100%;
             padding: 12px;
+            margin-bottom: 10px;
             border: none;
             border-radius: 6px;
-            cursor: pointer;
-            font-weight: bold;
             font-size: 16px;
-            color: white;
-            transition: opacity 0.2s;
-            flex: 1;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background 0.2s;
         }
-        button:active { opacity: 0.8; }
-        
-        #btnHost { background: #0077ff; }
-        #btnJoin { background: #00cc66; }
 
-        .room-display {
+        .btn-host { background: #0078d7; color: white; }
+        .btn-host:active { background: #005a9e; }
+        
+        .btn-join { background: #107c10; color: white; }
+        .btn-join:active { background: #0b5a0b; }
+
+        #status-text {
+            margin-top: 15px;
+            font-size: 14px;
+            color: #aaa;
+            min-height: 20px;
+        }
+
+        .room-code {
             font-size: 32px;
             font-weight: bold;
-            color: #FFFF00;
+            color: #ffeb3b;
             letter-spacing: 5px;
             margin: 10px 0;
-            background: #222;
+            background: #000;
             padding: 10px;
-            border-radius: 8px;
-            border: 1px dashed #666;
-        }
-        
-        #statusMsg {
-            color: #ccc;
-            font-size: 13px;
-            min-height: 1.5em;
+            border-radius: 4px;
         }
 
-        .hidden { display: none !important; }
+        /* ゲーム画面のステータス表示 */
+        #game-hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            pointer-events: none;
+            font-size: 14px;
+            color: #00ff00;
+            text-shadow: 1px 1px 2px black;
+        }
     </style>
 </head>
 <body>
 
-<div id="menuOverlay">
-    <h2>Multiplayer Shooter</h2>
-    
-    <div class="input-group">
-        <label>Player Name</label>
-        <input type="text" id="username" value="Player1" placeholder="Enter Name">
-    </div>
-
-    <hr style="width:100%; border:0; border-top:1px solid #444; margin: 5px 0;">
-
-    <div id="menuMain">
-        <div class="input-group">
-            <label>Join Room (Enter 4-digit ID)</label>
-            <div style="display:flex; gap:10px;">
-                <input type="number" id="joinRoomId" placeholder="1234" style="flex:1;">
-                <button id="btnJoin" style="flex:1;">JOIN</button>
-            </div>
+    <div id="ui-layer">
+        <div class="panel" id="panel-menu">
+            <h1>Shooter Online</h1>
+            <input type="text" id="input-name" placeholder="Enter Nickname" value="Player">
+            <button class="btn-host" id="btn-create">Create Room</button>
+            <div style="margin: 10px 0; color: #666;">- OR -</div>
+            <input type="number" id="input-room-id" placeholder="Room ID (4 digits)">
+            <button class="btn-join" id="btn-join">Join Room</button>
+            <div id="status-text">Ready to connect.</div>
         </div>
-        
-        <div style="margin: 10px 0; font-size:12px; color:#666;">- OR -</div>
-        
-        <button id="btnHost" style="width:100%;">Create New Room (HOST)</button>
+
+        <div class="panel" id="panel-waiting" style="display: none;">
+            <h1>Waiting for P2...</h1>
+            <p>Share this Room ID:</p>
+            <div class="room-code" id="display-room-id">----</div>
+            <div id="waiting-status">Creating room...</div>
+        </div>
     </div>
 
-    <div id="menuWaiting" class="hidden">
-        <div style="color:#aaa;">Room ID</div>
-        <div id="displayRoomId" class="room-display">----</div>
-        <div style="font-size:12px; color:#888;">Waiting for opponent...</div>
+    <div id="game-hud">
+        Status: <span id="connection-status">Offline</span>
     </div>
 
-    <div id="statusMsg">Ready</div>
-</div>
-
-<canvas id="gameCanvas"></canvas>
+    <canvas id="gameCanvas"></canvas>
 
 <script type="module">
-    // --- Firebase Imports ---
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+    // ---------------------------------------------------------
+    // 1. Firebase Configuration & Imports (V10 Modular)
+    // ---------------------------------------------------------
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { 
-        getFirestore, 
-        collection, 
-        doc, 
-        setDoc, 
-        getDoc, 
-        updateDoc, 
-        onSnapshot, 
-        addDoc 
-    } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+        getFirestore, collection, doc, setDoc, getDoc, updateDoc, 
+        onSnapshot, addDoc 
+    } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-    // --- Firebase Config ---
     const firebaseConfig = {
-      apiKey: "AIzaSyA8B-JtwDskK3omhjUCbjERHBZ6UDdm854",
-      authDomain: "crownarena-1a321.firebaseapp.com",
-      projectId: "crownarena-1a321",
-      storageBucket: "crownarena-1a321.firebasestorage.app",
-      messagingSenderId: "103440875843",
-      appId: "1:103440875843:web:d34b314c4df7e0d491aff6",
-      measurementId: "G-N9KDL9B9Y5"
+        apiKey: "AIzaSyA8B-JtwDskK3omhjUCbjERHBZ6UDdm854",
+        authDomain: "crownarena-1a321.firebaseapp.com",
+        projectId: "crownarena-1a321",
+        storageBucket: "crownarena-1a321.firebasestorage.app",
+        messagingSenderId: "103440875843",
+        appId: "1:103440875843:web:d34b314c4df7e0d491aff6",
+        measurementId: "G-N9KDL9B9Y5"
     };
 
+    // Initialize Firebase
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
+    console.log("Firebase Initialized");
 
-    /**
-     * NetworkManager
-     * Firestoreを使った自動シグナリングクラス
-     */
+    // ---------------------------------------------------------
+    // 2. Network Manager (WebRTC + Firestore Signaling)
+    // ---------------------------------------------------------
     class NetworkManager {
         constructor() {
             this.pc = null;
-            this.dc = null;
+            this.dc = null; // DataChannel
             this.roomId = null;
-            this.isConnected = false;
+            this.isHost = false;
+            this.remoteCandidatesQueue = []; // ICE候補待機キュー
             
-            this.config = {
+            // 公開STUNサーバー
+            this.rtcConfig = {
                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
             };
 
-            // イベントコールバック
-            this.onConnected = () => {};
-            this.onMessage = (msg) => {};
-            this.onStatusChange = (msg) => {};
+            // コールバック関数（Gameクラスからセットされる）
+            this.onConnect = () => {};
+            this.onData = (data) => {};
+            this.onStatus = (msg) => {};
         }
 
-        // WebRTC共通初期化
+        // 共通: PeerConnection作成
         createPeerConnection() {
-            this.pc = new RTCPeerConnection(this.config);
-            
+            this.pc = new RTCPeerConnection(this.rtcConfig);
+
+            // 接続状態の監視
             this.pc.onconnectionstatechange = () => {
-                console.log("Connection State:", this.pc.connectionState);
+                console.log("WebRTC State:", this.pc.connectionState);
+                if (this.pc.connectionState === 'connected') {
+                    this.onStatus("Connected!");
+                }
             };
         }
 
-        // DataChannel設定
+        // DataChannelセットアップ (メッセージ受信)
         setupDataChannel(channel) {
             this.dc = channel;
             this.dc.onopen = () => {
                 console.log("DataChannel OPEN");
-                this.isConnected = true;
-                this.onStatusChange("Connected!");
-                this.onConnected();
+                this.onConnect(); // ゲーム開始トリガー
             };
-            this.dc.onmessage = (event) => {
-                this.onMessage(event.data);
+            this.dc.onmessage = (e) => {
+                // 受信データはJSONパースしてゲームへ渡す
+                try {
+                    const data = JSON.parse(e.data);
+                    this.onData(data);
+                } catch (err) {
+                    console.error("Data parse error", err);
+                }
             };
         }
 
-        // ICE Candidateの収集と交換
-        collectIceCandidates(roomRef, localName, remoteName) {
-            const candidatesCollection = collection(roomRef, localName);
+        // データを送信
+        send(data) {
+            if (this.dc && this.dc.readyState === 'open') {
+                this.dc.send(JSON.stringify(data));
+            }
+        }
 
-            // 自分のCandidateをFirestoreに追加
+        // ICE Candidateの収集と交換ロジック
+        async collectIceCandidates(roomRef, localName, remoteName) {
+            const localCandidatesCol = collection(roomRef, localName);
+            const remoteCandidatesCol = collection(roomRef, remoteName);
+
+            // 1. 自分のICE候補が出たらFirestoreに保存
             this.pc.onicecandidate = async (event) => {
                 if (event.candidate) {
-                    await addDoc(candidatesCollection, event.candidate.toJSON());
+                    try {
+                        await addDoc(localCandidatesCol, event.candidate.toJSON());
+                    } catch (e) {
+                        console.error("Error adding candidate:", e);
+                    }
                 }
             };
 
-            // 相手のCandidateを監視して追加
-            const remoteCandidatesCollection = collection(roomRef, remoteName);
-            onSnapshot(remoteCandidatesCollection, (snapshot) => {
+            // 2. 相手のICE候補を監視
+            onSnapshot(remoteCandidatesCol, (snapshot) => {
                 snapshot.docChanges().forEach(async (change) => {
                     if (change.type === 'added') {
                         const candidate = new RTCIceCandidate(change.doc.data());
-                        try {
+                        // 重要: RemoteDescriptionがまだ設定されていない場合はキューに入れる
+                        if (!this.pc.remoteDescription) {
+                            console.log("Queueing remote candidate");
+                            this.remoteCandidatesQueue.push(candidate);
+                        } else {
                             await this.pc.addIceCandidate(candidate);
-                        } catch (e) {
-                            console.error("Error adding ice candidate", e);
                         }
                     }
                 });
             });
         }
 
-        // Host処理
-        async startHost() {
+        // キューに溜まったICE候補を処理する
+        async processCandidateQueue() {
+            console.log(`Processing ${this.remoteCandidatesQueue.length} queued candidates`);
+            for (const candidate of this.remoteCandidatesQueue) {
+                await this.pc.addIceCandidate(candidate);
+            }
+            this.remoteCandidatesQueue = [];
+        }
+
+        // --- HOST 処理 ---
+        async createRoom() {
+            this.isHost = true;
             this.createPeerConnection();
             
-            // HostがDataChannel作成
+            // HostがDataChannelを作成
             const channel = this.pc.createDataChannel("game");
             this.setupDataChannel(channel);
 
-            // ランダム4桁ID生成
+            // ルームID生成 (ランダム4桁)
             this.roomId = Math.floor(1000 + Math.random() * 9000).toString();
             const roomRef = doc(db, 'rooms', this.roomId);
 
@@ -255,29 +281,34 @@
             const offer = await this.pc.createOffer();
             await this.pc.setLocalDescription(offer);
 
-            // ルーム作成
+            // FirestoreにOffer保存
             const roomData = {
-                offer: { type: offer.type, sdp: offer.sdp }
+                offer: { type: offer.type, sdp: offer.sdp },
+                createdAt: new Date()
             };
             await setDoc(roomRef, roomData);
 
-            // ICE交換開始 (Host: callerCandidates, Remote: calleeCandidates)
+            // ICE交換開始 (Hostは callerCandidates に書き込み)
             this.collectIceCandidates(roomRef, 'callerCandidates', 'calleeCandidates');
 
-            // Answer監視
+            // Answer待ち受け
             onSnapshot(roomRef, async (snapshot) => {
                 const data = snapshot.data();
                 if (!this.pc.currentRemoteDescription && data && data.answer) {
+                    console.log("Answer received!");
                     const answer = new RTCSessionDescription(data.answer);
                     await this.pc.setRemoteDescription(answer);
+                    // RemoteDescriptionセット後に待機中のICE候補を適用
+                    await this.processCandidateQueue();
                 }
             });
 
             return this.roomId;
         }
 
-        // Join処理
-        async startJoin(roomId) {
+        // --- JOIN 処理 ---
+        async joinRoom(roomId) {
+            this.isHost = false;
             this.roomId = roomId;
             const roomRef = doc(db, 'rooms', roomId);
             const roomSnapshot = await getDoc(roomRef);
@@ -288,16 +319,17 @@
 
             this.createPeerConnection();
 
-            // DataChannel受け取り
-            this.pc.ondatachannel = (event) => {
-                this.setupDataChannel(event.channel);
+            // JoinerはDataChannelを受け取るイベントを設定
+            this.pc.ondatachannel = (e) => {
+                this.setupDataChannel(e.channel);
             };
 
-            // Offer適用
+            // Offer取得 & Remote設定
             const offer = roomSnapshot.data().offer;
             await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
+            // Remote設定できたので、もし既にICEが来ていれば処理したいが、Join側はまだリスナー起動前
 
-            // Answer作成
+            // Answer作成 & Local設定
             const answer = await this.pc.createAnswer();
             await this.pc.setLocalDescription(answer);
 
@@ -306,459 +338,280 @@
                 answer: { type: answer.type, sdp: answer.sdp }
             });
 
-            // ICE交換開始 (Join: calleeCandidates, Remote: callerCandidates)
-            this.collectIceCandidates(roomRef, 'calleeCandidates', 'callerCandidates');
+            // ICE交換開始 (Joinは calleeCandidates に書き込み)
+            await this.collectIceCandidates(roomRef, 'calleeCandidates', 'callerCandidates');
+            
+            // Join側はRemoteセット済みなので、監視開始直後のSnapshotでICEが来れば即適用される
         }
     }
 
-    /**
-     * 既存ゲームロジック
-     */
-    class Vec2 {
-        constructor(x, y) { this.x = x; this.y = y; }
-    }
-
-    class InputManager {
-        constructor(canvas) {
-            this.canvas = canvas;
-            this.p1 = {
-                moveVector: new Vec2(0, 0), btnActive: false,
-                stickBase: new Vec2(150, canvas.height - 150), stickPos: new Vec2(0, 0),
-                stickRadius: 60, btnPos: new Vec2(canvas.width - 150, canvas.height - 150),
-                btnRadius: 50, stickTouchId: null, btnTouchId: null
-            };
-            this.p2 = {
-                moveVector: new Vec2(0, 0), btnActive: false,
-                buttons: [], activeTouches: {}
-            };
-            this.lastTap = null;
-            this.updateLayout(canvas.width, canvas.height);
-            this.setupEvents();
-        }
-        updateLayout(width, height) {
-            this.p1.stickBase = new Vec2(120, height - 120);
-            this.p1.btnPos = new Vec2(width - 120, height - 120);
-            const size = 40, gap = 5, baseX = width - 180, baseY = 20;
-            this.p2.buttons = [
-                { id: 'U', x: baseX + size + gap, y: baseY, w: size, h: size },
-                { id: 'L', x: baseX, y: baseY + size + gap, w: size, h: size },
-                { id: 'D', x: baseX + size + gap, y: baseY + (size + gap) * 2, w: size, h: size },
-                { id: 'R', x: baseX + (size + gap) * 2, y: baseY + size + gap, w: size, h: size },
-                { id: 'F', x: baseX + (size + gap) * 3 + 20, y: baseY + size + gap, w: 50, h: 50 }
-            ];
-        }
-        setupEvents() {
-            const handleTouch = (e, type) => {
-                if(e.target.tagName !== 'CANVAS') return;
-                e.preventDefault();
-                for (let i = 0; i < e.changedTouches.length; i++) {
-                    const t = e.changedTouches[i];
-                    const x = t.clientX;
-                    const y = t.clientY;
-                    if (type === 'start') {
-                        this.lastTap = { x: x, y: y };
-                        if (x < this.canvas.width / 2 && y > this.canvas.height / 2 && !this.p1.stickActive) {
-                            this.p1.stickActive = true;
-                            this.p1.stickTouchId = t.identifier;
-                            this.updateP1Stick(x, y);
-                        } else if (x >= this.canvas.width / 2 && y > this.canvas.height / 2) {
-                            const dist = Math.hypot(x - this.p1.btnPos.x, y - this.p1.btnPos.y);
-                            if (dist < 100) {
-                                this.p1.btnActive = true;
-                                this.p1.btnTouchId = t.identifier;
-                            }
-                        }
-                        this.p2.buttons.forEach(btn => {
-                            if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
-                                this.p2.activeTouches[t.identifier] = btn.id;
-                            }
-                        });
-                        this.updateP2Input();
-                    } else if (type === 'move') {
-                        if (t.identifier === this.p1.stickTouchId) this.updateP1Stick(x, y);
-                    } else if (type === 'end') {
-                        if (t.identifier === this.p1.stickTouchId) {
-                            this.p1.stickActive = false;
-                            this.p1.stickTouchId = null;
-                            this.p1.stickPos.x = 0; this.p1.stickPos.y = 0;
-                            this.p1.moveVector.x = 0; this.p1.moveVector.y = 0;
-                        }
-                        if (t.identifier === this.p1.btnTouchId) {
-                            this.p1.btnActive = false;
-                            this.p1.btnTouchId = null;
-                        }
-                        if (this.p2.activeTouches[t.identifier]) {
-                            delete this.p2.activeTouches[t.identifier];
-                            this.updateP2Input();
-                        }
-                    }
-                }
-            };
-            this.canvas.addEventListener('touchstart', (e) => handleTouch(e, 'start'), { passive: false });
-            this.canvas.addEventListener('touchmove', (e) => handleTouch(e, 'move'), { passive: false });
-            this.canvas.addEventListener('touchend', (e) => handleTouch(e, 'end'), { passive: false });
-            this.canvas.addEventListener('touchcancel', (e) => handleTouch(e, 'end'), { passive: false });
-        }
-        updateP1Stick(touchX, touchY) {
-            let dx = touchX - this.p1.stickBase.x;
-            let dy = touchY - this.p1.stickBase.y;
-            const dist = Math.hypot(dx, dy);
-            if (dist > this.p1.stickRadius) {
-                const ratio = this.p1.stickRadius / dist;
-                dx *= ratio; dy *= ratio;
-            }
-            this.p1.stickPos.x = dx; this.p1.stickPos.y = dy;
-            this.p1.moveVector.x = dx / this.p1.stickRadius;
-            this.p1.moveVector.y = dy / this.p1.stickRadius;
-        }
-        updateP2Input() {
-            let vx = 0, vy = 0, fire = false;
-            Object.values(this.p2.activeTouches).forEach(btnId => {
-                if (btnId === 'U') vy = -1; if (btnId === 'D') vy = 1;
-                if (btnId === 'L') vx = -1; if (btnId === 'R') vx = 1;
-                if (btnId === 'F') fire = true;
-            });
-            if (vx !== 0 && vy !== 0) { const len = Math.hypot(vx, vy); vx /= len; vy /= len; }
-            this.p2.moveVector.x = vx; this.p2.moveVector.y = vy;
-            this.p2.btnActive = fire;
-        }
-        clearTap() { this.lastTap = null; }
-        draw(ctx) {
-            ctx.beginPath(); ctx.arc(this.p1.stickBase.x, this.p1.stickBase.y, this.p1.stickRadius, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.2)'; ctx.fill();
-            ctx.strokeStyle = 'rgba(100, 100, 255, 0.5)'; ctx.stroke();
-            ctx.beginPath(); ctx.arc(this.p1.stickBase.x + this.p1.stickPos.x, this.p1.stickBase.y + this.p1.stickPos.y, 30, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(100, 100, 255, 0.8)'; ctx.fill();
-            ctx.beginPath(); ctx.arc(this.p1.btnPos.x, this.p1.btnPos.y, this.p1.btnRadius, 0, Math.PI * 2);
-            ctx.fillStyle = this.p1.btnActive ? 'rgba(100, 100, 255, 0.8)' : 'rgba(100, 100, 255, 0.4)'; ctx.fill();
-            ctx.strokeStyle = 'white'; ctx.stroke();
-            ctx.fillStyle = 'white'; ctx.font = '16px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            ctx.fillText('P1 FIRE', this.p1.btnPos.x, this.p1.btnPos.y);
-            this.p2.buttons.forEach(btn => {
-                ctx.fillStyle = 'rgba(100, 255, 100, 0.5)';
-                if (Object.values(this.p2.activeTouches).includes(btn.id)) ctx.fillStyle = 'rgba(100, 255, 100, 0.9)';
-                ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
-                ctx.fillStyle = '#000'; ctx.font = '12px Arial';
-                ctx.fillText(btn.id, btn.x + btn.w/2, btn.y + btn.h/2);
-            });
-            ctx.fillStyle = '#FFF'; ctx.fillText("P2", this.canvas.width - 50, 15);
-        }
-    }
-
-    class Bullet {
-        constructor(x, y, vx, vy, ownerId) {
-            this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.radius = 6; this.ownerId = ownerId; this.active = true;
-        }
-        update(width, height) {
-            this.x += this.vx; this.y += this.vy;
-            if (this.x < 0 || this.x > width || this.y < 0 || this.y > height) this.active = false;
-        }
-        draw(ctx) {
-            ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-            if (this.ownerId === 1) ctx.fillStyle = '#8888FF'; else if (this.ownerId === 2) ctx.fillStyle = '#88FF88'; else ctx.fillStyle = '#FF00FF';
-            ctx.fill();
-        }
-    }
-
-    class Player {
-        constructor(id, x, y, color) {
-            this.id = id; this.startX = x; this.startY = y; this.x = x; this.y = y; this.color = color;
-            this.radius = 15; this.speed = 5; this.maxHp = 100; this.hp = this.maxHp; this.lives = 3;
-            this.isDead = false; this.invincibleUntil = 0; this.lastShotTime = 0; this.shotInterval = 150;
-        }
-        respawn() {
-            this.x = this.startX; this.y = this.startY; this.hp = this.maxHp; this.isDead = false;
-            this.invincibleUntil = Date.now() + 3000;
-        }
-        takeDamage(amount) {
-            if (this.isDead || this.isInvincible()) return false;
-            this.hp -= amount;
-            if (this.hp <= 0) { this.hp = 0; this.lives--; this.isDead = true; return true; }
-            return false;
-        }
-        isInvincible() { return Date.now() < this.invincibleUntil; }
-        update(inputData, width, height, bullets) {
-            if (this.isDead) return;
-            this.x += inputData.moveVector.x * this.speed;
-            this.y += inputData.moveVector.y * this.speed;
-            this.x = Math.max(this.radius, Math.min(width - this.radius, this.x));
-            this.y = Math.max(this.radius, Math.min(height - this.radius, this.y));
-            if (inputData.btnActive) {
-                const now = Date.now();
-                if (now - this.lastShotTime > this.shotInterval) { this.shoot(bullets); this.lastShotTime = now; }
-            }
-        }
-        shoot(bullets) {
-            let vx = 0; const speed = 12;
-            if (this.id === 1) vx = speed; if (this.id === 2) vx = -speed;
-            bullets.push(new Bullet(this.x, this.y, vx, 0, this.id));
-        }
-        draw(ctx) {
-            if (this.isDead) return;
-            ctx.save();
-            if (this.isInvincible()) {
-                ctx.globalAlpha = 0.5; ctx.fillStyle = '#FFF'; ctx.font = '10px Arial';
-                ctx.textAlign = 'center'; ctx.fillText('INVINCIBLE', this.x, this.y - 25);
-            }
-            ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-            ctx.fillStyle = this.color; ctx.fill();
-            ctx.fillStyle = 'rgba(255,255,255,0.5)';
-            if (this.id === 1) ctx.fillRect(this.x, this.y - 5, 10, 10);
-            if (this.id === 2) ctx.fillRect(this.x - 10, this.y - 5, 10, 10);
-            ctx.restore();
-        }
-    }
-
-    class Enemy {
-        constructor(x, y) {
-            this.x = x; this.y = y; this.radius = 15; this.speed = 2; this.active = true;
-            this.lastShotTime = Date.now(); this.shotInterval = 2000;
-        }
-        update(player, bullets) {
-            if (!player.isDead) {
-                const dx = player.x - this.x; const dy = player.y - this.y;
-                const dist = Math.hypot(dx, dy);
-                if (dist > 0) { this.x += (dx / dist) * this.speed; this.y += (dy / dist) * this.speed; }
-                const now = Date.now();
-                if (now - this.lastShotTime > this.shotInterval) {
-                    const bulletSpeed = 6;
-                    bullets.push(new Bullet(this.x, this.y, (dx / dist) * bulletSpeed, (dy / dist) * bulletSpeed, false));
-                    this.lastShotTime = now;
-                }
-            }
-        }
-        draw(ctx) {
-            ctx.beginPath(); ctx.rect(this.x - 15, this.y - 15, 30, 30);
-            ctx.fillStyle = '#FF4444'; ctx.fill();
-        }
-    }
-
+    // ---------------------------------------------------------
+    // 3. Game Logic (Canvas & Input)
+    // ---------------------------------------------------------
     class Game {
         constructor() {
             this.canvas = document.getElementById('gameCanvas');
             this.ctx = this.canvas.getContext('2d');
-            this.input = new InputManager(this.canvas);
-            
-            this.network = new NetworkManager();
-            this.network.onConnected = () => {
-                document.getElementById('menuOverlay').style.display = 'none';
-            };
-            this.network.onStatusChange = (msg) => {
-                document.getElementById('statusMsg').innerText = msg;
-            };
-
-            this.setupMenuUI();
             this.resize();
+
+            // ネットワーク管理
+            this.network = new NetworkManager();
+            this.bindNetworkEvents();
+
+            // プレイヤー状態
+            this.localPlayer = { x: 100, y: 100, color: '#00ccff', id: 1 };
+            this.remotePlayer = { x: 300, y: 100, color: '#00ff00', id: 2 };
+            
+            // 入力管理
+            this.input = { x: 0, y: 0 };
+            this.touchId = null;
+            this.stickBase = { x: 100, y: 0 }; // resizeで調整
+
+            // UI要素
+            this.uiMenu = document.getElementById('panel-menu');
+            this.uiWaiting = document.getElementById('panel-waiting');
+            this.uiLayer = document.getElementById('ui-layer');
+            this.statusText = document.getElementById('status-text');
+            this.hudStatus = document.getElementById('connection-status');
+
+            // イベントリスナー設定
             window.addEventListener('resize', () => this.resize());
-            this.initGame();
-            this.loop = this.loop.bind(this);
-            requestAnimationFrame(this.loop);
-        }
+            this.setupUI();
+            this.setupTouch();
 
-        setupMenuUI() {
-            const btnHost = document.getElementById('btnHost');
-            const btnJoin = document.getElementById('btnJoin');
-            const joinRoomId = document.getElementById('joinRoomId');
-            const displayRoomId = document.getElementById('displayRoomId');
-            const menuMain = document.getElementById('menuMain');
-            const menuWaiting = document.getElementById('menuWaiting');
-
-            // HOST
-            btnHost.onclick = async () => {
-                this.network.onStatusChange('Creating Room...');
-                btnHost.disabled = true;
-                btnJoin.disabled = true;
-                
-                const roomId = await this.network.startHost();
-                displayRoomId.innerText = roomId;
-                
-                menuMain.classList.add('hidden');
-                menuWaiting.classList.remove('hidden');
-            };
-
-            // JOIN
-            btnJoin.onclick = async () => {
-                const roomId = joinRoomId.value.trim();
-                if (roomId.length !== 4) {
-                    alert('Please enter a 4-digit Room ID.');
-                    return;
-                }
-                this.network.onStatusChange('Joining Room...');
-                btnHost.disabled = true;
-                btnJoin.disabled = true;
-
-                try {
-                    await this.network.startJoin(roomId);
-                } catch (e) {
-                    alert('Error: ' + e.message);
-                    btnHost.disabled = false;
-                    btnJoin.disabled = false;
-                    this.network.onStatusChange('Error joining room.');
-                }
-            };
-        }
-
-        initGame() {
-            this.p1 = new Player(1, 100, this.canvas.height / 2, '#00CCFF');
-            this.p2 = new Player(2, this.canvas.width - 100, this.canvas.height / 2, '#00FF66');
-            this.bullets = [];
-            this.enemies = [];
-            this.winner = null;
-            this.isGameOver = false;
-            this.p1RespawnTimer = 0;
-            this.p2RespawnTimer = 0;
-            this.lastSpawnTime = 0;
+            // ゲームループ開始
+            this.lastTime = 0;
+            requestAnimationFrame((t) => this.loop(t));
         }
 
         resize() {
             this.canvas.width = window.innerWidth;
             this.canvas.height = window.innerHeight;
-            if (this.input) this.input.updateLayout(this.canvas.width, this.canvas.height);
+            // スティック位置調整（左下）
+            this.stickBase = { x: 120, y: this.canvas.height - 120 };
         }
 
-        checkCollisions() {
-            if (this.isGameOver) return;
-            this.bullets.forEach(b => {
-                if (!b.active) return;
-                let target = null;
-                if (b.ownerId === 1) target = this.p2;
-                else if (b.ownerId === 2) target = this.p1;
-                
-                this.enemies.forEach(e => {
-                    if (e.active && (b.ownerId === 1 || b.ownerId === 2)) {
-                        if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius + 10) {
-                            e.active = false; b.active = false;
-                        }
-                    }
-                });
+        bindNetworkEvents() {
+            // 接続完了時
+            this.network.onConnect = () => {
+                this.uiLayer.style.opacity = '0';
+                setTimeout(() => { this.uiLayer.style.display = 'none'; }, 500);
+                this.hudStatus.innerText = "Online";
+                this.hudStatus.style.color = "#00ff00";
+            };
 
-                if (target && !target.isDead) {
-                    const dist = Math.hypot(b.x - target.x, b.y - target.y);
-                    if (dist < b.radius + target.radius) {
-                        b.active = false;
-                        if (target.takeDamage(20)) this.handlePlayerDeath(target);
+            // データ受信時 (相手の座標更新)
+            this.network.onData = (data) => {
+                if (data.type === 'move') {
+                    this.remotePlayer.x = data.x;
+                    this.remotePlayer.y = data.y;
+                }
+            };
+
+            // ステータス表示更新
+            this.network.onStatus = (msg) => {
+                this.statusText.innerText = msg;
+                document.getElementById('waiting-status').innerText = msg;
+            };
+        }
+
+        setupUI() {
+            const btnCreate = document.getElementById('btn-create');
+            const btnJoin = document.getElementById('btn-join');
+            const inputRoomId = document.getElementById('input-room-id');
+            const displayRoomId = document.getElementById('display-room-id');
+
+            // Create Room
+            btnCreate.onclick = async () => {
+                btnCreate.disabled = true;
+                btnJoin.disabled = true;
+                this.statusText.innerText = "Creating room...";
+                
+                try {
+                    const roomId = await this.network.createRoom();
+                    this.localPlayer.id = 1; // Host is P1
+                    this.localPlayer.color = '#00ccff';
+                    this.localPlayer.x = 100;
+
+                    this.uiMenu.style.display = 'none';
+                    this.uiWaiting.style.display = 'block';
+                    displayRoomId.innerText = roomId;
+                } catch (e) {
+                    console.error(e);
+                    alert("Error creating room: " + e.message);
+                    btnCreate.disabled = false;
+                    btnJoin.disabled = false;
+                }
+            };
+
+            // Join Room
+            btnJoin.onclick = async () => {
+                const roomId = inputRoomId.value.trim();
+                if (roomId.length !== 4) {
+                    alert("Please enter a valid 4-digit ID");
+                    return;
+                }
+                
+                btnCreate.disabled = true;
+                btnJoin.disabled = true;
+                this.statusText.innerText = "Joining...";
+
+                try {
+                    await this.network.joinRoom(roomId);
+                    this.localPlayer.id = 2; // Joiner is P2
+                    this.localPlayer.color = '#00ff00';
+                    this.localPlayer.x = this.canvas.width - 100;
+                    // 成功したらWebRTC接続待ちになるのでUIはそのまま
+                } catch (e) {
+                    console.error(e);
+                    alert("Error joining: " + e.message);
+                    btnCreate.disabled = false;
+                    btnJoin.disabled = false;
+                    this.statusText.innerText = "Join failed.";
+                }
+            };
+        }
+
+        setupTouch() {
+            const handleStart = (e) => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    const t = e.changedTouches[i];
+                    // 左画面半分をスティック領域とする
+                    if (t.clientX < this.canvas.width / 2 && this.touchId === null) {
+                        this.touchId = t.identifier;
+                        this.updateStick(t.clientX, t.clientY);
                     }
                 }
-            });
+            };
+
+            const handleMove = (e) => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    const t = e.changedTouches[i];
+                    if (t.identifier === this.touchId) {
+                        this.updateStick(t.clientX, t.clientY);
+                    }
+                }
+            };
+
+            const handleEnd = (e) => {
+                e.preventDefault();
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    if (e.changedTouches[i].identifier === this.touchId) {
+                        this.touchId = null;
+                        this.input = { x: 0, y: 0 };
+                    }
+                }
+            };
+
+            this.canvas.addEventListener('touchstart', handleStart, { passive: false });
+            this.canvas.addEventListener('touchmove', handleMove, { passive: false });
+            this.canvas.addEventListener('touchend', handleEnd, { passive: false });
         }
 
-        handlePlayerDeath(player) {
-            if (player.lives < 0) {
-                this.isGameOver = true;
-                this.winner = (player.id === 1) ? 2 : 1;
-            } else {
-                const respawnTime = Date.now() + 2000;
-                if (player.id === 1) this.p1RespawnTimer = respawnTime;
-                else this.p2RespawnTimer = respawnTime;
+        updateStick(x, y) {
+            const maxDist = 50;
+            let dx = x - this.stickBase.x;
+            let dy = y - this.stickBase.y;
+            const dist = Math.hypot(dx, dy);
+            
+            // 正規化
+            if (dist > maxDist) {
+                dx = (dx / dist) * maxDist;
+                dy = (dy / dist) * maxDist;
             }
+            
+            // 入力値 (-1 ~ 1)
+            this.input.x = dx / maxDist;
+            this.input.y = dy / maxDist;
         }
 
         update() {
-            if (this.isGameOver) {
-                this.checkRetry();
-                this.input.clearTap();
-                return;
+            // ローカルプレイヤーの移動
+            const speed = 5;
+            this.localPlayer.x += this.input.x * speed;
+            this.localPlayer.y += this.input.y * speed;
+
+            // 画面外制限
+            const r = 20;
+            this.localPlayer.x = Math.max(r, Math.min(this.canvas.width - r, this.localPlayer.x));
+            this.localPlayer.y = Math.max(r, Math.min(this.canvas.height - r, this.localPlayer.y));
+
+            // ネットワーク送信 (DataChannelが開通している場合)
+            if (this.network.dc && this.network.dc.readyState === 'open') {
+                this.network.send({
+                    type: 'move',
+                    x: this.localPlayer.x,
+                    y: this.localPlayer.y
+                });
             }
-
-            if (this.p1.isDead && this.p1.lives >= 0 && Date.now() > this.p1RespawnTimer) this.p1.respawn();
-            if (this.p2.isDead && this.p2.lives >= 0 && Date.now() > this.p2RespawnTimer) this.p2.respawn();
-
-            const now = Date.now();
-            if (now - this.lastSpawnTime > 3000) {
-                 this.enemies.push(new Enemy(Math.random()*this.canvas.width, -50));
-                 this.lastSpawnTime = now;
-            }
-
-            this.p1.update(this.input.p1, this.canvas.width, this.canvas.height, this.bullets);
-            this.p2.update(this.input.p2, this.canvas.width, this.canvas.height, this.bullets);
-
-            this.bullets.forEach(b => b.update(this.canvas.width, this.canvas.height));
-            this.bullets = this.bullets.filter(b => b.active);
-            
-            this.enemies.forEach(e => e.update(this.p1, this.bullets));
-            this.enemies = this.enemies.filter(e => e.active);
-
-            this.checkCollisions();
-            this.input.clearTap();
-        }
-
-        checkRetry() {
-            const btnW = 160, btnH = 50;
-            const btnX = this.canvas.width / 2 - btnW / 2;
-            const btnY = this.canvas.height / 2 + 80;
-            if (this.input.lastTap) {
-                const tap = this.input.lastTap;
-                if (tap.x >= btnX && tap.x <= btnX + btnW && tap.y >= btnY && tap.y <= btnY + btnH) {
-                    this.initGame();
-                }
-            }
-        }
-
-        drawUI() {
-            // ローカル関数として定義
-            const drawBar = (player, x, y) => {
-                const width = 150, height = 15;
-                this.ctx.fillStyle = '#555'; this.ctx.fillRect(x, y, width, height);
-                const hpPercent = player.hp / player.maxHp;
-                this.ctx.fillStyle = player.id === 1 ? '#00CCFF' : '#00FF66';
-                this.ctx.fillRect(x, y, width * hpPercent, height);
-                this.ctx.strokeStyle = '#FFF'; this.ctx.strokeRect(x, y, width, height);
-                
-                // === 【修正箇所】 ===
-                // 以前はここで `ctx.textAlign` と書いていたためエラーになっていました。
-                // this.ctx に修正しています。
-                this.ctx.fillStyle = '#FFF'; 
-                this.ctx.font = '14px Arial'; 
-                this.ctx.textAlign = 'left';
-                this.ctx.fillText(`P${player.id} Lives: ${Math.max(0, player.lives)}`, x, y + 30);
-            };
-
-            drawBar(this.p1, 20, 20);
-            drawBar(this.p2, this.canvas.width - 170, 20);
-
-            if (this.network.isConnected) {
-                this.ctx.fillStyle = '#00FF00';
-                this.ctx.font = 'bold 20px Arial';
-                this.ctx.textAlign = 'center';
-                this.ctx.fillText('CONNECTED', this.canvas.width / 2, 30);
-            }
-        }
-
-        drawGameOver() {
-            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-            this.ctx.fillStyle = this.winner === 1 ? '#00CCFF' : '#00FF66';
-            this.ctx.font = 'bold 40px Arial'; this.ctx.textAlign = 'center'; this.ctx.textBaseline = 'middle';
-            this.ctx.fillText(`PLAYER ${this.winner} WINS!`, this.canvas.width / 2, this.canvas.height / 2 - 20);
-            const btnW = 160, btnH = 50, btnX = this.canvas.width / 2 - btnW / 2, btnY = this.canvas.height / 2 + 80;
-            this.ctx.fillStyle = '#FFF'; this.ctx.fillRect(btnX, btnY, btnW, btnH);
-            this.ctx.fillStyle = '#000'; this.ctx.font = 'bold 24px Arial';
-            this.ctx.fillText('RETRY', this.canvas.width / 2, btnY + btnH / 2);
         }
 
         draw() {
-            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-            if (!this.isGameOver) {
-                this.p1.draw(this.ctx);
-                this.p2.draw(this.ctx);
-                this.enemies.forEach(e => e.draw(this.ctx));
-                this.bullets.forEach(b => b.draw(this.ctx));
-                this.drawUI();
-                this.input.draw(this.ctx);
-            } else {
-                this.drawGameOver();
+            // 画面クリア
+            this.ctx.fillStyle = '#1a1a1a';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+            // グリッド描画（見た目用）
+            this.ctx.strokeStyle = '#333';
+            this.ctx.lineWidth = 1;
+            for(let x=0; x<this.canvas.width; x+=50) {
+                this.ctx.beginPath(); this.ctx.moveTo(x,0); this.ctx.lineTo(x,this.canvas.height); this.ctx.stroke();
             }
+            for(let y=0; y<this.canvas.height; y+=50) {
+                this.ctx.beginPath(); this.ctx.moveTo(0,y); this.ctx.lineTo(this.canvas.width,y); this.ctx.stroke();
+            }
+
+            // プレイヤー描画関数
+            const drawPlayer = (p) => {
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, 20, 0, Math.PI * 2);
+                this.ctx.fillStyle = p.color;
+                this.ctx.fill();
+                this.ctx.lineWidth = 3;
+                this.ctx.strokeStyle = 'white';
+                this.ctx.stroke();
+                
+                // 名前
+                this.ctx.fillStyle = 'white';
+                this.ctx.font = '14px Arial';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText(p.id === this.localPlayer.id ? "YOU" : "ENEMY", p.x, p.y - 30);
+            };
+
+            drawPlayer(this.localPlayer);
+            drawPlayer(this.remotePlayer);
+
+            // スティック描画
+            this.ctx.beginPath();
+            this.ctx.arc(this.stickBase.x, this.stickBase.y, 50, 0, Math.PI*2);
+            this.ctx.fillStyle = 'rgba(255,255,255,0.1)';
+            this.ctx.fill();
+            this.ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+            this.ctx.stroke();
+
+            this.ctx.beginPath();
+            this.ctx.arc(
+                this.stickBase.x + this.input.x * 50, 
+                this.stickBase.y + this.input.y * 50, 
+                25, 0, Math.PI*2
+            );
+            this.ctx.fillStyle = 'rgba(255,255,255,0.5)';
+            this.ctx.fill();
         }
 
-        loop() {
+        loop(timestamp) {
             this.update();
             this.draw();
-            requestAnimationFrame(this.loop);
+            requestAnimationFrame((t) => this.loop(t));
         }
     }
 
-    // Start Game
-    window.onload = () => { new Game(); };
+    // ゲーム起動
+    window.onload = () => {
+        new Game();
+    };
 </script>
 </body>
 </html>
