@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Firestore Only Shooter</title>
+    <title>Firestore Battle Fixed</title>
     <style>
         body {
             margin: 0;
@@ -120,7 +120,7 @@
     </div>
 
     <div id="hud">
-        P1: <span id="hp-p1">100</span> | P2: <span id="hp-p2">100</span>
+        P1 HP: <span id="hp-p1">100</span> | P2 HP: <span id="hp-p2">100</span>
         <br>
         Room: <span id="hud-room">----</span>
     </div>
@@ -161,10 +161,9 @@
     const BULLET_RADIUS = 5;
     const MOVE_SPEED = 5;
     const BULLET_SPEED = 10;
-    const FIRE_RATE = 200; // ms
     
     // Network Config
-    const SYNC_INTERVAL = 100; // 100msごとにFirestore同期 (負荷軽減)
+    const SYNC_INTERVAL = 100; // ms
 
     // ---------------------------------------------------------
     // 3. Game Logic Class
@@ -172,7 +171,7 @@
     class Game {
         constructor() {
             this.roomId = null;
-            this.isHost = false; // P1 = Host, P2 = Guest
+            this.isHost = false; 
             this.myId = null;    // 'p1' or 'p2'
             
             this.state = {
@@ -180,7 +179,7 @@
                     p1: { x: 100, y: 100, hp: 100, lives: 3, isShooting: false, active: false },
                     p2: { x: 300, y: 100, hp: 100, lives: 3, isShooting: false, active: false }
                 },
-                bullets: [], // [{x, y, vx, vy, owner}]
+                bullets: [],
                 status: "waiting"
             };
 
@@ -191,7 +190,6 @@
             
             // Timers
             this.lastSyncTime = 0;
-            this.lastFireTime = 0;
 
             this.resize();
             window.addEventListener('resize', () => this.resize());
@@ -201,7 +199,6 @@
             this.uiMenu = document.getElementById('panel-menu');
             this.uiWait = document.getElementById('panel-wait');
             this.uiLayer = document.getElementById('ui-layer');
-            this.statusMsg = document.getElementById('status-msg');
             
             this.bindButtons();
 
@@ -243,41 +240,54 @@
 
         async joinRoom(id) {
             const docRef = doc(db, "rooms", id);
-            const snap = await getDoc(docRef);
-            
-            if (!snap.exists()) {
-                alert("Room not found!");
-                return;
+            try {
+                const snap = await getDoc(docRef);
+                
+                if (!snap.exists()) {
+                    alert("Room not found!");
+                    return;
+                }
+
+                this.roomId = id;
+                this.isHost = false;
+                this.myId = 'p2';
+
+                // P2 Active化 & ステータス変更
+                await updateDoc(docRef, {
+                    "players.p2.active": true,
+                    "status": "playing"
+                });
+
+                document.getElementById('hud-room').innerText = this.roomId;
+                this.subscribeToRoom();
+
+            } catch (e) {
+                console.error(e);
+                alert("Error joining room");
             }
-
-            this.roomId = id;
-            this.isHost = false;
-            this.myId = 'p2';
-
-            // P2 Active化
-            await updateDoc(docRef, {
-                "players.p2.active": true,
-                "status": "playing"
-            });
-
-            this.uiMenu.style.display = 'none';
-            this.uiLayer.style.display = 'none';
-            document.getElementById('hud-room').innerText = this.roomId;
-
-            this.subscribeToRoom();
         }
 
+        /**
+         * ここを修正: HostもGuestも status === 'playing' を検知したらUIを消す
+         */
         subscribeToRoom() {
-            onSnapshot(doc(db, "rooms", this.roomId), (doc) => {
-                if (!doc.exists()) return;
-                const data = doc.data();
+            console.log("Subscribing to room:", this.roomId);
+            
+            onSnapshot(doc(db, "rooms", this.roomId), (docSnap) => {
+                if (!docSnap.exists()) return;
+                const data = docSnap.data();
                 
-                // --- Sync Logic ---
-                // 自分のデータは上書きせず、相手のデータと共有データ(弾、HP)を取り込む
+                // 1. UI遷移チェック (Host/Guest共通)
+                if (data.status === "playing") {
+                    if (this.uiLayer.style.display !== 'none') {
+                        console.log("Game Started! Hiding UI.");
+                        this.uiLayer.style.display = 'none';
+                    }
+                }
 
+                // 2. データ同期ロジック
                 if (this.isHost) {
-                    // Host (P1) は P2の「位置」と「操作」だけ受け取る
-                    // HPや弾は自分が計算して書き込む側なので、Firestoreからは読まない（上書き防止）
+                    // Host (P1) は P2の「入力結果(座標・射撃)」を受け取る
                     if (data.players.p2) {
                         this.state.players.p2.x = data.players.p2.x;
                         this.state.players.p2.y = data.players.p2.y;
@@ -285,22 +295,19 @@
                         this.state.players.p2.active = data.players.p2.active;
                     }
                 } else {
-                    // Guest (P2) は P1の全データ と 弾 と 自分のHP/Lives (Hostが計算) を受け取る
+                    // Guest (P2) は Hostが計算した「全データ」を受け取る
                     if (data.players.p1) this.state.players.p1 = data.players.p1;
                     if (data.bullets) this.state.bullets = data.bullets;
-                    // 自分のHPはHostが管理しているので同期する
+                    // Hostが計算した自分のHP同期
                     if (data.players.p2) {
                         this.state.players.p2.hp = data.players.p2.hp;
                         this.state.players.p2.lives = data.players.p2.lives;
                     }
-                    if (data.status === "playing") {
-                        this.uiLayer.style.display = 'none';
-                    }
                 }
                 
                 // HUD更新
-                document.getElementById('hp-p1').innerText = this.state.players.p1.hp;
-                document.getElementById('hp-p2').innerText = this.state.players.p2.hp;
+                document.getElementById('hp-p1').innerText = Math.floor(this.state.players.p1.hp);
+                document.getElementById('hp-p2').innerText = Math.floor(this.state.players.p2.hp);
             });
         }
 
@@ -310,16 +317,15 @@
 
             try {
                 if (this.isHost) {
-                    // Hostは P1位置, P1操作, 全弾丸, 全HP を書き込む
-                    // Dot notationで必要な部分だけ更新
+                    // Host: 全体の整合性を管理
                     await updateDoc(ref, {
                         "players.p1": this.state.players.p1,
-                        "players.p2.hp": this.state.players.p2.hp, // Host権限でHP更新
+                        "players.p2.hp": this.state.players.p2.hp, 
                         "players.p2.lives": this.state.players.p2.lives,
                         "bullets": this.state.bullets
                     });
                 } else {
-                    // Guestは P2位置, P2操作 のみを書き込む (active維持)
+                    // Guest: 自分の操作のみ送信
                     await updateDoc(ref, {
                         "players.p2.x": this.state.players.p2.x,
                         "players.p2.y": this.state.players.p2.y,
@@ -327,7 +333,7 @@
                     });
                 }
             } catch (e) {
-                console.error("Sync Error:", e);
+                console.error("Sync Error (Ignored):", e.message);
             }
         }
 
@@ -336,16 +342,18 @@
         update(dt) {
             // 1. 自分の移動更新
             const me = this.state.players[this.myId];
-            me.x += this.input.x * MOVE_SPEED;
-            me.y += this.input.y * MOVE_SPEED;
-            // 画面外制限
-            me.x = Math.max(20, Math.min(CANVAS.width - 20, me.x));
-            me.y = Math.max(20, Math.min(CANVAS.height - 20, me.y));
+            if (me) {
+                me.x += this.input.x * MOVE_SPEED;
+                me.y += this.input.y * MOVE_SPEED;
+                // 画面外制限
+                me.x = Math.max(20, Math.min(CANVAS.width - 20, me.x));
+                me.y = Math.max(20, Math.min(CANVAS.height - 20, me.y));
 
-            // 射撃フラグ更新
-            me.isShooting = this.input.fire;
+                // 射撃フラグ更新
+                me.isShooting = this.input.fire;
+            }
 
-            // 2. Hostのみが実行する処理 (弾の生成・移動・衝突)
+            // 2. Hostのみが実行するサーバーロジック
             if (this.isHost) {
                 this.hostGameLogic();
             }
@@ -363,14 +371,8 @@
             ['p1', 'p2'].forEach(pid => {
                 const p = this.state.players[pid];
                 if (p.active && p.isShooting) {
-                    // シンプルな連射制限
-                    // 注: 本格的には各プレイヤーごとのLastFireが必要だが、ここでは簡易化
-                    // 乱数でバラけさせるか、確率で生成して連射速度っぽくする
-                    if (Math.random() < 0.1) { // 約 6発/秒
-                        let vx = 0, vy = 0;
-                        if (pid === 'p1') vx = BULLET_SPEED; // P1は右へ
-                        else vx = -BULLET_SPEED;             // P2は左へ
-                        
+                    if (Math.random() < 0.1) { // 連射速度調整
+                        let vx = (pid === 'p1') ? BULLET_SPEED : -BULLET_SPEED;
                         this.state.bullets.push({
                             x: p.x, y: p.y, vx: vx, vy: 0, owner: pid
                         });
@@ -378,11 +380,12 @@
                 }
             });
 
-            // 弾の移動 & 削除
+            // 弾の移動
             this.state.bullets.forEach(b => {
                 b.x += b.vx;
                 b.y += b.vy;
             });
+
             // 画面外削除
             this.state.bullets = this.state.bullets.filter(b => 
                 b.x > 0 && b.x < CANVAS.width && b.y > 0 && b.y < CANVAS.height
@@ -391,11 +394,10 @@
             // 当たり判定 (Server Authority)
             this.state.bullets = this.state.bullets.filter(b => {
                 let hit = false;
-                // ターゲット特定
                 const targetId = b.owner === 'p1' ? 'p2' : 'p1';
                 const target = this.state.players[targetId];
 
-                if (target.active && target.lives > 0) {
+                if (target.active && target.hp > 0) {
                     const dx = b.x - target.x;
                     const dy = b.y - target.y;
                     if (Math.hypot(dx, dy) < PLAYER_RADIUS + BULLET_RADIUS) {
@@ -403,7 +405,7 @@
                         target.hp -= 10;
                         if (target.hp <= 0) {
                             target.hp = 100;
-                            target.lives--;
+                            // target.lives--; // 残機システムは今回は簡易実装のためHP回復のみ
                         }
                     }
                 }
@@ -430,7 +432,7 @@
                 CTX.fillStyle = 'red';
                 CTX.fillRect(p.x - 20, p.y - 35, 40, 5);
                 CTX.fillStyle = '#0f0';
-                CTX.fillRect(p.x - 20, p.y - 35, 40 * (p.hp/100), 5);
+                CTX.fillRect(p.x - 20, p.y - 35, 40 * (Math.max(0, p.hp)/100), 5);
             });
 
             // Bullets
