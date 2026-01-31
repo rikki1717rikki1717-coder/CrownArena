@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Canvas Mobile Shooter</title>
+    <title>Mobile Shooter - Stock System</title>
     <style>
         body {
             margin: 0;
@@ -11,6 +11,9 @@
             overflow: hidden; /* スクロール禁止 */
             background-color: #222;
             touch-action: none; /* スマホでのピンチズーム等を無効化 */
+            font-family: Arial, sans-serif;
+            user-select: none; /* テキスト選択禁止 */
+            -webkit-user-select: none;
         }
         canvas {
             display: block;
@@ -34,20 +37,20 @@ class Vec2 {
 
 /**
  * InputManagerクラス
- * タッチ操作（仮想スティックとボタン）を管理
+ * タッチ操作（仮想スティックとボタン）およびUIタップを管理
  */
 class InputManager {
     constructor(canvas) {
         this.canvas = canvas;
         
         // 仮想スティック（左側）
-        this.stickBase = new Vec2(150, canvas.height - 150); // 基準位置
-        this.stickPos = new Vec2(0, 0); // 入力位置（相対）
-        this.stickRadius = 60; // 土台の半径
-        this.knobRadius = 30;  // つまみの半径
+        this.stickBase = new Vec2(150, canvas.height - 150);
+        this.stickPos = new Vec2(0, 0);
+        this.stickRadius = 60;
+        this.knobRadius = 30;
         this.stickActive = false;
         this.stickTouchId = null;
-        this.moveVector = new Vec2(0, 0); // 正規化された移動ベクトル
+        this.moveVector = new Vec2(0, 0);
 
         // 射撃ボタン（右側）
         this.btnPos = new Vec2(canvas.width - 150, canvas.height - 150);
@@ -55,12 +58,13 @@ class InputManager {
         this.btnActive = false;
         this.btnTouchId = null;
 
-        // イベントリスナー設定
+        // UIタップ用（リトライボタン判定などに使用）
+        this.lastTap = null;
+
         this.setupEvents();
     }
 
     updateLayout(width, height) {
-        // 画面サイズが変わったらUI位置を再計算
         this.stickBase = new Vec2(120, height - 120);
         this.btnPos = new Vec2(width - 120, height - 120);
     }
@@ -74,17 +78,18 @@ class InputManager {
                 const x = t.clientX;
                 const y = t.clientY;
 
+                // UIタップ座標を記録（ゲームオーバー時の判定用）
+                this.lastTap = { x: x, y: y };
+
                 // 左画面エリア: スティック操作
                 if (x < this.canvas.width / 2 && !this.stickActive) {
                     this.stickActive = true;
                     this.stickTouchId = t.identifier;
-                    // タッチした場所を基準にする場合はここを調整（現在は固定位置からドラッグ）
                     this.updateStick(x, y);
                 }
                 // 右画面エリア: 射撃ボタン
                 else if (x >= this.canvas.width / 2) {
                     const dist = Math.hypot(x - this.btnPos.x, y - this.btnPos.y);
-                    // ボタン付近をタップしたか、あるいは右側ならどこでもOKにするか（ここは右側広めに判定）
                     if (dist < 100) { 
                         this.btnActive = true;
                         this.btnTouchId = t.identifier;
@@ -132,7 +137,6 @@ class InputManager {
         let dy = touchY - this.stickBase.y;
         const dist = Math.hypot(dx, dy);
 
-        // 半径内に収める
         if (dist > this.stickRadius) {
             const ratio = this.stickRadius / dist;
             dx *= ratio;
@@ -141,15 +145,17 @@ class InputManager {
 
         this.stickPos.x = dx;
         this.stickPos.y = dy;
-
-        // 移動ベクトルの計算 (-1.0 ~ 1.0)
         this.moveVector.x = dx / this.stickRadius;
         this.moveVector.y = dy / this.stickRadius;
     }
 
-    // UI描画
+    // タップ情報のクリア（1フレームごとに呼ぶ）
+    clearTap() {
+        this.lastTap = null;
+    }
+
     draw(ctx) {
-        // スティックベース
+        // スティック
         ctx.beginPath();
         ctx.arc(this.stickBase.x, this.stickBase.y, this.stickRadius, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
@@ -157,7 +163,6 @@ class InputManager {
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
         ctx.stroke();
 
-        // スティックノブ
         ctx.beginPath();
         ctx.arc(this.stickBase.x + this.stickPos.x, this.stickBase.y + this.stickPos.y, this.knobRadius, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
@@ -181,7 +186,6 @@ class InputManager {
 
 /**
  * Bulletクラス
- * プレイヤーと敵の弾を兼ねる
  */
 class Bullet {
     constructor(x, y, vx, vy, isPlayerBullet) {
@@ -197,8 +201,6 @@ class Bullet {
     update(width, height) {
         this.x += this.vx;
         this.y += this.vy;
-
-        // 画面外に出たら消去
         if (this.x < 0 || this.x > width || this.y < 0 || this.y > height) {
             this.active = false;
         }
@@ -207,27 +209,69 @@ class Bullet {
     draw(ctx) {
         ctx.beginPath();
         ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.fillStyle = this.isPlayerBullet ? '#FFFF00' : '#FF00FF'; // プレイヤー:黄, 敵:紫
+        ctx.fillStyle = this.isPlayerBullet ? '#FFFF00' : '#FF00FF';
         ctx.fill();
     }
 }
 
 /**
  * Playerクラス
+ * 残機、無敵状態の管理を追加
  */
 class Player {
     constructor(x, y) {
+        this.startX = x; // リスポーン位置用
+        this.startY = y;
         this.x = x;
         this.y = y;
         this.radius = 15;
         this.speed = 5;
-        this.hp = 100;
+        
+        // ステータス
         this.maxHp = 100;
+        this.hp = this.maxHp;
+        this.lives = 3; // 残機
+        
+        // 状態フラグ
+        this.isDead = false;         // 死亡中（リスポーン待ち）
+        this.invincibleUntil = 0;    // この時間まで無敵
+
+        // 射撃管理
         this.lastShotTime = 0;
-        this.shotInterval = 150; // 連射間隔(ms)
+        this.shotInterval = 150;
+    }
+
+    // リスポーン処理
+    respawn() {
+        this.x = this.startX;
+        this.y = this.startY;
+        this.hp = this.maxHp;
+        this.isDead = false;
+        this.invincibleUntil = Date.now() + 3000; // 3秒間無敵
+    }
+
+    // ダメージ処理
+    takeDamage(amount) {
+        if (this.isDead || this.isInvincible()) return;
+
+        this.hp -= amount;
+        if (this.hp <= 0) {
+            this.hp = 0;
+            this.lives--;
+            this.isDead = true;
+            // 戻り値で死亡したことを通知
+            return true;
+        }
+        return false;
+    }
+
+    isInvincible() {
+        return Date.now() < this.invincibleUntil;
     }
 
     update(input, width, height, bullets) {
+        if (this.isDead) return; // 死亡中は操作不可
+
         // 移動
         this.x += input.moveVector.x * this.speed;
         this.y += input.moveVector.y * this.speed;
@@ -247,11 +291,24 @@ class Player {
     }
 
     shoot(bullets) {
-        // 上に向かって発射
         bullets.push(new Bullet(this.x, this.y - 20, 0, -10, true));
     }
 
     draw(ctx) {
+        if (this.isDead) return;
+
+        ctx.save();
+        
+        // 無敵中は半透明にする
+        if (this.isInvincible()) {
+            ctx.globalAlpha = 0.5;
+            // 無敵テキスト表示
+            ctx.fillStyle = '#FFF';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('INVINCIBLE', this.x, this.y - 25);
+        }
+
         // 本体
         ctx.beginPath();
         ctx.moveTo(this.x, this.y - this.radius);
@@ -260,11 +317,13 @@ class Player {
         ctx.closePath();
         ctx.fillStyle = '#00CCFF';
         ctx.fill();
+
+        ctx.restore();
     }
 }
 
 /**
- * Enemyクラス（ダメージテスト用）
+ * Enemyクラス
  */
 class Enemy {
     constructor(x, y) {
@@ -278,23 +337,22 @@ class Enemy {
     }
 
     update(player, bullets) {
-        // プレイヤーに向かって移動
-        const dx = player.x - this.x;
-        const dy = player.y - this.y;
-        const dist = Math.hypot(dx, dy);
-        
-        if (dist > 0) {
-            this.x += (dx / dist) * this.speed;
-            this.y += (dy / dist) * this.speed;
-        }
+        if (!player.isDead) {
+            const dx = player.x - this.x;
+            const dy = player.y - this.y;
+            const dist = Math.hypot(dx, dy);
+            
+            if (dist > 0) {
+                this.x += (dx / dist) * this.speed;
+                this.y += (dy / dist) * this.speed;
+            }
 
-        // 定期的に弾を撃つ
-        const now = Date.now();
-        if (now - this.lastShotTime > this.shotInterval) {
-            // プレイヤーへのベクトル
-            const bulletSpeed = 6;
-            bullets.push(new Bullet(this.x, this.y, (dx / dist) * bulletSpeed, (dy / dist) * bulletSpeed, false));
-            this.lastShotTime = now;
+            const now = Date.now();
+            if (now - this.lastShotTime > this.shotInterval) {
+                const bulletSpeed = 6;
+                bullets.push(new Bullet(this.x, this.y, (dx / dist) * bulletSpeed, (dy / dist) * bulletSpeed, false));
+                this.lastShotTime = now;
+            }
         }
     }
 
@@ -308,75 +366,142 @@ class Enemy {
 
 /**
  * Gameクラス
- * ゲームループと全体管理
+ * リスポーン、ゲームオーバー、リトライ制御を追加
  */
 class Game {
     constructor() {
         this.canvas = document.getElementById('gameCanvas');
         this.ctx = this.canvas.getContext('2d');
-        this.resize();
-
         this.input = new InputManager(this.canvas);
-        this.player = new Player(this.canvas.width / 2, this.canvas.height / 2);
-        this.bullets = [];
-        this.enemies = [];
-        this.isGameOver = false;
-
-        // リサイズ対応
+        
+        this.resize();
         window.addEventListener('resize', () => this.resize());
 
-        // 敵スポーンタイマー
-        this.lastSpawnTime = 0;
+        this.initGame();
 
         // ループ開始
         this.loop = this.loop.bind(this);
         requestAnimationFrame(this.loop);
     }
 
+    initGame() {
+        // ゲーム状態の初期化
+        this.player = new Player(this.canvas.width / 2, this.canvas.height / 2);
+        this.bullets = [];
+        this.enemies = [];
+        this.isGameOver = false;
+        this.respawnTimer = 0; // リスポーン待ち時間用
+        this.lastSpawnTime = 0;
+    }
+
     resize() {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
-        // UI位置の再計算
         if (this.input) this.input.updateLayout(this.canvas.width, this.canvas.height);
+        // 画面サイズ変更時にプレイヤー位置が画面外に行かないようにする等は省略（リスポーン時に中央に戻るため）
     }
 
-    // 敵の生成
     spawnEnemy() {
         const now = Date.now();
-        if (now - this.lastSpawnTime > 1500) { // 1.5秒ごとに生成
+        if (now - this.lastSpawnTime > 1500) {
             const x = Math.random() * this.canvas.width;
-            const y = -50; // 画面上から出現
+            const y = -50;
             this.enemies.push(new Enemy(x, y));
             this.lastSpawnTime = now;
         }
     }
 
-    // 当たり判定
     checkCollisions() {
-        // 弾とプレイヤー/敵の判定
+        if (this.isGameOver) return;
+
         this.bullets.forEach(b => {
             if (!b.active) return;
 
             if (b.isPlayerBullet) {
-                // 対 敵
+                // プレイヤーの弾 -> 敵
                 this.enemies.forEach(e => {
                     if (!e.active) return;
                     const dist = Math.hypot(b.x - e.x, b.y - e.y);
-                    if (dist < b.radius + e.radius + 10) { // 少し甘めの判定
-                        e.active = false; // 敵死亡
+                    if (dist < b.radius + e.radius + 10) {
+                        e.active = false;
                         b.active = false;
                     }
                 });
             } else {
-                // 対 プレイヤー
+                // 敵の弾 -> プレイヤー
                 const dist = Math.hypot(b.x - this.player.x, b.y - this.player.y);
                 if (dist < b.radius + this.player.radius) {
-                    this.player.hp -= 20; // 20ダメージ
-                    b.active = false;
-                    if (this.player.hp < 0) this.player.hp = 0;
+                    // ダメージ処理
+                    if (this.player.takeDamage(20)) {
+                        // 死亡した場合（HP0）
+                        b.active = false;
+                        this.handlePlayerDeath();
+                    } else if (!this.player.isInvincible()) {
+                        // 生きていてダメージを受けた場合
+                        b.active = false;
+                    }
                 }
             }
         });
+    }
+
+    handlePlayerDeath() {
+        if (this.player.lives < 0) {
+            this.isGameOver = true;
+        } else {
+            // 2秒後にリスポーンするためのタイマーセット
+            this.respawnTimer = Date.now() + 2000;
+        }
+    }
+
+    update() {
+        // ゲームオーバー時のリトライ判定
+        if (this.isGameOver) {
+            this.checkRetry();
+            this.input.clearTap(); // タップ情報の破棄
+            return;
+        }
+
+        // リスポーン待ち処理
+        if (this.player.isDead) {
+            if (Date.now() > this.respawnTimer && this.player.lives >= 0) {
+                // 中央位置を再設定してリスポーン
+                this.player.startX = this.canvas.width / 2;
+                this.player.startY = this.canvas.height / 2;
+                this.player.respawn();
+            } else if (this.player.lives < 0) {
+                this.isGameOver = true;
+            }
+        }
+
+        this.spawnEnemy();
+        this.player.update(this.input, this.canvas.width, this.canvas.height, this.bullets);
+
+        this.bullets.forEach(b => b.update(this.canvas.width, this.canvas.height));
+        this.bullets = this.bullets.filter(b => b.active);
+
+        this.enemies.forEach(e => e.update(this.player, this.bullets));
+        this.enemies = this.enemies.filter(e => e.active);
+
+        this.checkCollisions();
+        
+        this.input.clearTap();
+    }
+
+    checkRetry() {
+        // リトライボタン領域（画面中央下部）
+        const btnW = 160;
+        const btnH = 50;
+        const btnX = this.canvas.width / 2 - btnW / 2;
+        const btnY = this.canvas.height / 2 + 60;
+
+        if (this.input.lastTap) {
+            const tap = this.input.lastTap;
+            if (tap.x >= btnX && tap.x <= btnX + btnW &&
+                tap.y >= btnY && tap.y <= btnY + btnH) {
+                this.initGame(); // リセット
+            }
+        }
     }
 
     drawUI() {
@@ -394,58 +519,47 @@ class Game {
         this.ctx.lineWidth = 2;
         this.ctx.strokeRect(20, 20, 200, 20);
 
-        // テキスト
+        // 残機表示
         this.ctx.fillStyle = '#FFF';
-        this.ctx.font = '14px Arial';
+        this.ctx.font = '20px Arial';
         this.ctx.textAlign = 'left';
-        this.ctx.fillText(`HP: ${this.player.hp}`, 230, 35);
+        this.ctx.fillText(`Lives: ${Math.max(0, this.player.lives)}`, 20, 70);
     }
 
     drawGameOver() {
         this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+        // GAME OVER テキスト
         this.ctx.fillStyle = '#FFF';
-        this.ctx.font = '40px Arial';
+        this.ctx.font = 'bold 40px Arial';
         this.ctx.textAlign = 'center';
-        this.ctx.fillText('GAME OVER', this.canvas.width / 2, this.canvas.height / 2);
-        
-        this.ctx.font = '20px Arial';
-        this.ctx.fillText('Reload to Restart', this.canvas.width / 2, this.canvas.height / 2 + 50);
-    }
+        this.ctx.textBaseline = 'middle';
+        this.ctx.fillText('GAME OVER', this.canvas.width / 2, this.canvas.height / 2 - 20);
 
-    update() {
-        if (this.isGameOver) return;
+        // RETRY ボタン描画
+        const btnW = 160;
+        const btnH = 50;
+        const btnX = this.canvas.width / 2 - btnW / 2;
+        const btnY = this.canvas.height / 2 + 60;
 
-        // ゲームオーバー判定
-        if (this.player.hp <= 0) {
-            this.isGameOver = true;
-        }
+        this.ctx.fillStyle = '#FFF';
+        this.ctx.fillRect(btnX, btnY, btnW, btnH);
 
-        this.spawnEnemy();
-        this.player.update(this.input, this.canvas.width, this.canvas.height, this.bullets);
-
-        // 弾の更新と削除
-        this.bullets.forEach(b => b.update(this.canvas.width, this.canvas.height));
-        this.bullets = this.bullets.filter(b => b.active);
-
-        // 敵の更新と削除
-        this.enemies.forEach(e => e.update(this.player, this.bullets));
-        this.enemies = this.enemies.filter(e => e.active);
-
-        this.checkCollisions();
+        this.ctx.fillStyle = '#000';
+        this.ctx.font = 'bold 24px Arial';
+        this.ctx.fillText('RETRY', this.canvas.width / 2, btnY + btnH / 2);
     }
 
     draw() {
-        // 画面クリア
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
         if (!this.isGameOver) {
             this.player.draw(this.ctx);
             this.enemies.forEach(e => e.draw(this.ctx));
             this.bullets.forEach(b => b.draw(this.ctx));
-            this.drawUI(); // HPバーなど
-            this.input.draw(this.ctx); // コントローラー
+            this.drawUI();
+            this.input.draw(this.ctx);
         } else {
             this.drawGameOver();
         }
