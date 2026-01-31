@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Firestore Battle Fixed</title>
+    <title>Firestore Shooter Fixed</title>
     <style>
         body {
             margin: 0;
@@ -129,7 +129,7 @@
 
 <script type="module">
     // ---------------------------------------------------------
-    // 1. Firebase Config (Modular SDK v9/v10)
+    // 1. Firebase Config
     // ---------------------------------------------------------
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { 
@@ -161,8 +161,6 @@
     const BULLET_RADIUS = 5;
     const MOVE_SPEED = 5;
     const BULLET_SPEED = 10;
-    
-    // Network Config
     const SYNC_INTERVAL = 100; // ms
 
     // ---------------------------------------------------------
@@ -219,23 +217,29 @@
             this.isHost = true;
             this.myId = 'p1';
             
+            // Hostの初期状態
+            this.state.players.p1.active = true;
+            this.state.players.p1.x = 100;
+            this.state.players.p2.active = false; // P2はまだいない
+
             const initialData = {
-                players: {
-                    p1: { ...this.state.players.p1, active: true },
-                    p2: { ...this.state.players.p2, active: false }
-                },
+                players: this.state.players,
                 bullets: [],
                 status: "waiting"
             };
 
-            await setDoc(doc(db, "rooms", this.roomId), initialData);
-            
-            this.uiMenu.style.display = 'none';
-            this.uiWait.style.display = 'block';
-            document.getElementById('room-display').innerText = this.roomId;
-            document.getElementById('hud-room').innerText = this.roomId;
+            try {
+                await setDoc(doc(db, "rooms", this.roomId), initialData);
+                
+                this.uiMenu.style.display = 'none';
+                this.uiWait.style.display = 'block';
+                document.getElementById('room-display').innerText = this.roomId;
+                document.getElementById('hud-room').innerText = this.roomId;
 
-            this.subscribeToRoom();
+                this.subscribeToRoom();
+            } catch (e) {
+                alert("Create Error: " + e.message);
+            }
         }
 
         async joinRoom(id) {
@@ -252,9 +256,14 @@
                 this.isHost = false;
                 this.myId = 'p2';
 
-                // P2 Active化 & ステータス変更
+                // Guestの初期状態
+                this.state.players.p2.active = true;
+                this.state.players.p2.x = CANVAS.width - 100;
+
+                // サーバーに自分が参加したことと、ステータス変更を通知
                 await updateDoc(docRef, {
                     "players.p2.active": true,
+                    "players.p2.x": this.state.players.p2.x,
                     "status": "playing"
                 });
 
@@ -267,9 +276,6 @@
             }
         }
 
-        /**
-         * ここを修正: HostもGuestも status === 'playing' を検知したらUIを消す
-         */
         subscribeToRoom() {
             console.log("Subscribing to room:", this.roomId);
             
@@ -277,7 +283,7 @@
                 if (!docSnap.exists()) return;
                 const data = docSnap.data();
                 
-                // 1. UI遷移チェック (Host/Guest共通)
+                // 1. ステータス変更によるUI遷移 (Host/Guest共通)
                 if (data.status === "playing") {
                     if (this.uiLayer.style.display !== 'none') {
                         console.log("Game Started! Hiding UI.");
@@ -285,23 +291,41 @@
                     }
                 }
 
-                // 2. データ同期ロジック
+                // 2. データの安全な同期 (個別プロパティ更新)
+                const p1Data = data.players.p1;
+                const p2Data = data.players.p2;
+
                 if (this.isHost) {
-                    // Host (P1) は P2の「入力結果(座標・射撃)」を受け取る
-                    if (data.players.p2) {
-                        this.state.players.p2.x = data.players.p2.x;
-                        this.state.players.p2.y = data.players.p2.y;
-                        this.state.players.p2.isShooting = data.players.p2.isShooting;
-                        this.state.players.p2.active = data.players.p2.active;
+                    // --- HOST (P1) ---
+                    // P2の「座標」「操作」のみ受け取る。HPや弾はHostが正。
+                    if (p2Data) {
+                        const p2 = this.state.players.p2;
+                        p2.x = p2Data.x;
+                        p2.y = p2Data.y;
+                        p2.isShooting = p2Data.isShooting;
+                        p2.active = p2Data.active; 
+                        // HPやBulletsは読み込まない（Hostが計算・管理するため）
                     }
                 } else {
-                    // Guest (P2) は Hostが計算した「全データ」を受け取る
-                    if (data.players.p1) this.state.players.p1 = data.players.p1;
-                    if (data.bullets) this.state.bullets = data.bullets;
-                    // Hostが計算した自分のHP同期
-                    if (data.players.p2) {
-                        this.state.players.p2.hp = data.players.p2.hp;
-                        this.state.players.p2.lives = data.players.p2.lives;
+                    // --- GUEST (P2) ---
+                    // P1の全情報、Bullets全情報、自分のHP (Host計算) を受け取る
+                    if (p1Data) {
+                        const p1 = this.state.players.p1;
+                        p1.x = p1Data.x;
+                        p1.y = p1Data.y;
+                        p1.hp = p1Data.hp;
+                        p1.active = p1Data.active;
+                        p1.isShooting = p1Data.isShooting;
+                    }
+                    if (data.bullets) {
+                        this.state.bullets = data.bullets;
+                    }
+                    if (p2Data) {
+                        // 自分のHPとLivesはHost管理なので同期
+                        this.state.players.p2.hp = p2Data.hp;
+                        this.state.players.p2.lives = p2Data.lives;
+                        // activeフラグも念の為同期
+                        this.state.players.p2.active = p2Data.active;
                     }
                 }
                 
@@ -317,7 +341,7 @@
 
             try {
                 if (this.isHost) {
-                    // Host: 全体の整合性を管理
+                    // Host: 自分のP1情報 + 計算済みのP2のHP + 全弾丸
                     await updateDoc(ref, {
                         "players.p1": this.state.players.p1,
                         "players.p2.hp": this.state.players.p2.hp, 
@@ -325,7 +349,8 @@
                         "bullets": this.state.bullets
                     });
                 } else {
-                    // Guest: 自分の操作のみ送信
+                    // Guest: 自分のP2座標と操作フラグのみ
+                    // players.p2 オブジェクト全体を上書きするとHP計算が戻ってしまうので注意
                     await updateDoc(ref, {
                         "players.p2.x": this.state.players.p2.x,
                         "players.p2.y": this.state.players.p2.y,
@@ -333,14 +358,14 @@
                     });
                 }
             } catch (e) {
-                console.error("Sync Error (Ignored):", e.message);
+                console.warn("Sync skipped:", e.message);
             }
         }
 
         // --- Game Loop ---
 
         update(dt) {
-            // 1. 自分の移動更新
+            // 1. 自分の移動更新 (Local Prediction)
             const me = this.state.players[this.myId];
             if (me) {
                 me.x += this.input.x * MOVE_SPEED;
@@ -353,7 +378,7 @@
                 me.isShooting = this.input.fire;
             }
 
-            // 2. Hostのみが実行するサーバーロジック
+            // 2. Hostのみが実行するサーバーロジック (弾生成、移動、当たり判定)
             if (this.isHost) {
                 this.hostGameLogic();
             }
@@ -370,8 +395,9 @@
             // 弾の生成 (P1 & P2)
             ['p1', 'p2'].forEach(pid => {
                 const p = this.state.players[pid];
+                // activeかつshootingなら弾を生成
                 if (p.active && p.isShooting) {
-                    if (Math.random() < 0.1) { // 連射速度調整
+                    if (Math.random() < 0.1) { // 簡易的な発射レート制御
                         let vx = (pid === 'p1') ? BULLET_SPEED : -BULLET_SPEED;
                         this.state.bullets.push({
                             x: p.x, y: p.y, vx: vx, vy: 0, owner: pid
@@ -404,12 +430,12 @@
                         hit = true;
                         target.hp -= 10;
                         if (target.hp <= 0) {
-                            target.hp = 100;
-                            // target.lives--; // 残機システムは今回は簡易実装のためHP回復のみ
+                            target.hp = 100; 
+                            // 簡易リスポーン：HP回復のみ
                         }
                     }
                 }
-                return !hit; // 当たったら消える
+                return !hit; // 当たったら弾を消す
             });
         }
 
@@ -421,6 +447,7 @@
             // Players
             ['p1', 'p2'].forEach(pid => {
                 const p = this.state.players[pid];
+                // アクティブでないプレイヤーは描画しない
                 if (!p.active) return;
                 
                 CTX.beginPath();
