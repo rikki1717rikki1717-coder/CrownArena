@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Mobile Shooter - Stock System</title>
+    <title>2-Player Versus Shooter</title>
     <style>
         body {
             margin: 0;
             padding: 0;
-            overflow: hidden; /* スクロール禁止 */
+            overflow: hidden;
             background-color: #222;
-            touch-action: none; /* スマホでのピンチズーム等を無効化 */
+            touch-action: none;
             font-family: Arial, sans-serif;
-            user-select: none; /* テキスト選択禁止 */
+            user-select: none;
             -webkit-user-select: none;
         }
         canvas {
@@ -37,164 +37,246 @@ class Vec2 {
 
 /**
  * InputManagerクラス
- * タッチ操作（仮想スティックとボタン）およびUIタップを管理
+ * P1（スティック）とP2（ボタン）の入力を管理
  */
 class InputManager {
     constructor(canvas) {
         this.canvas = canvas;
         
-        // 仮想スティック（左側）
-        this.stickBase = new Vec2(150, canvas.height - 150);
-        this.stickPos = new Vec2(0, 0);
-        this.stickRadius = 60;
-        this.knobRadius = 30;
-        this.stickActive = false;
-        this.stickTouchId = null;
-        this.moveVector = new Vec2(0, 0);
+        // --- Player 1 (Stick & Btn) ---
+        this.p1 = {
+            moveVector: new Vec2(0, 0),
+            btnActive: false,
+            // UI配置
+            stickBase: new Vec2(150, canvas.height - 150),
+            stickPos: new Vec2(0, 0),
+            stickRadius: 60,
+            btnPos: new Vec2(canvas.width - 150, canvas.height - 150),
+            btnRadius: 50,
+            // タッチID管理
+            stickTouchId: null,
+            btnTouchId: null
+        };
 
-        // 射撃ボタン（右側）
-        this.btnPos = new Vec2(canvas.width - 150, canvas.height - 150);
-        this.btnRadius = 50;
-        this.btnActive = false;
-        this.btnTouchId = null;
+        // --- Player 2 (D-Pad & Btn) ---
+        // 右上に配置
+        this.p2 = {
+            moveVector: new Vec2(0, 0),
+            btnActive: false,
+            // ボタン定義 (x, y, w, h, id)
+            buttons: [],
+            activeTouches: {} // touchId -> buttonId
+        };
 
-        // UIタップ用（リトライボタン判定などに使用）
+        // UIタップ用（リトライボタン等）
         this.lastTap = null;
 
+        this.updateLayout(canvas.width, canvas.height);
         this.setupEvents();
     }
 
     updateLayout(width, height) {
-        this.stickBase = new Vec2(120, height - 120);
-        this.btnPos = new Vec2(width - 120, height - 120);
+        // P1 Layout (Bottom Left/Right)
+        this.p1.stickBase = new Vec2(120, height - 120);
+        this.p1.btnPos = new Vec2(width - 120, height - 120);
+
+        // P2 Layout (Top Right - 簡易ボタン)
+        const size = 40;
+        const gap = 5;
+        const baseX = width - 180;
+        const baseY = 20;
+
+        // 上下左右 + 射撃(F)
+        this.p2.buttons = [
+            { id: 'U', x: baseX + size + gap, y: baseY, w: size, h: size },
+            { id: 'L', x: baseX, y: baseY + size + gap, w: size, h: size },
+            { id: 'D', x: baseX + size + gap, y: baseY + (size + gap) * 2, w: size, h: size },
+            { id: 'R', x: baseX + (size + gap) * 2, y: baseY + size + gap, w: size, h: size },
+            { id: 'F', x: baseX + (size + gap) * 3 + 20, y: baseY + size + gap, w: 50, h: 50 } // Fire
+        ];
     }
 
     setupEvents() {
-        // タッチ開始
-        this.canvas.addEventListener('touchstart', (e) => {
+        const handleTouch = (e, type) => {
             e.preventDefault();
             for (let i = 0; i < e.changedTouches.length; i++) {
                 const t = e.changedTouches[i];
                 const x = t.clientX;
                 const y = t.clientY;
 
-                // UIタップ座標を記録（ゲームオーバー時の判定用）
-                this.lastTap = { x: x, y: y };
+                if (type === 'start') {
+                    this.lastTap = { x: x, y: y }; // UI判定用
+                    
+                    // --- P1 Logic ---
+                    // スティック (画面左半分 & 下半分)
+                    if (x < this.canvas.width / 2 && y > this.canvas.height / 2 && !this.p1.stickActive) {
+                        this.p1.stickActive = true;
+                        this.p1.stickTouchId = t.identifier;
+                        this.updateP1Stick(x, y);
+                    }
+                    // 射撃 (画面右半分 & 下半分)
+                    else if (x >= this.canvas.width / 2 && y > this.canvas.height / 2) {
+                        const dist = Math.hypot(x - this.p1.btnPos.x, y - this.p1.btnPos.y);
+                        if (dist < 100) {
+                            this.p1.btnActive = true;
+                            this.p1.btnTouchId = t.identifier;
+                        }
+                    }
 
-                // 左画面エリア: スティック操作
-                if (x < this.canvas.width / 2 && !this.stickActive) {
-                    this.stickActive = true;
-                    this.stickTouchId = t.identifier;
-                    this.updateStick(x, y);
+                    // --- P2 Logic (Top Right Buttons) ---
+                    // ボタン当たり判定
+                    this.p2.buttons.forEach(btn => {
+                        if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
+                            this.p2.activeTouches[t.identifier] = btn.id;
+                        }
+                    });
+                    this.updateP2Input();
                 }
-                // 右画面エリア: 射撃ボタン
-                else if (x >= this.canvas.width / 2) {
-                    const dist = Math.hypot(x - this.btnPos.x, y - this.btnPos.y);
-                    if (dist < 100) { 
-                        this.btnActive = true;
-                        this.btnTouchId = t.identifier;
+                else if (type === 'move') {
+                    // P1 Stick
+                    if (t.identifier === this.p1.stickTouchId) {
+                        this.updateP1Stick(x, y);
+                    }
+                    // P2 Button Slide (簡易的に、移動してもボタンエリア内なら維持などの処理は省略し、Start判定のみ重視)
+                }
+                else if (type === 'end') {
+                    // P1
+                    if (t.identifier === this.p1.stickTouchId) {
+                        this.p1.stickActive = false;
+                        this.p1.stickTouchId = null;
+                        this.p1.stickPos.x = 0;
+                        this.p1.stickPos.y = 0;
+                        this.p1.moveVector.x = 0;
+                        this.p1.moveVector.y = 0;
+                    }
+                    if (t.identifier === this.p1.btnTouchId) {
+                        this.p1.btnActive = false;
+                        this.p1.btnTouchId = null;
+                    }
+
+                    // P2
+                    if (this.p2.activeTouches[t.identifier]) {
+                        delete this.p2.activeTouches[t.identifier];
+                        this.updateP2Input();
                     }
                 }
             }
-        }, { passive: false });
-
-        // タッチ移動
-        this.canvas.addEventListener('touchmove', (e) => {
-            e.preventDefault();
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                const t = e.changedTouches[i];
-                if (t.identifier === this.stickTouchId) {
-                    this.updateStick(t.clientX, t.clientY);
-                }
-            }
-        }, { passive: false });
-
-        // タッチ終了
-        const endHandler = (e) => {
-            e.preventDefault();
-            for (let i = 0; i < e.changedTouches.length; i++) {
-                const t = e.changedTouches[i];
-                if (t.identifier === this.stickTouchId) {
-                    this.stickActive = false;
-                    this.stickTouchId = null;
-                    this.stickPos.x = 0;
-                    this.stickPos.y = 0;
-                    this.moveVector.x = 0;
-                    this.moveVector.y = 0;
-                }
-                if (t.identifier === this.btnTouchId) {
-                    this.btnActive = false;
-                    this.btnTouchId = null;
-                }
-            }
         };
-        this.canvas.addEventListener('touchend', endHandler);
-        this.canvas.addEventListener('touchcancel', endHandler);
+
+        this.canvas.addEventListener('touchstart', (e) => handleTouch(e, 'start'), { passive: false });
+        this.canvas.addEventListener('touchmove', (e) => handleTouch(e, 'move'), { passive: false });
+        this.canvas.addEventListener('touchend', (e) => handleTouch(e, 'end'), { passive: false });
+        this.canvas.addEventListener('touchcancel', (e) => handleTouch(e, 'end'), { passive: false });
     }
 
-    updateStick(touchX, touchY) {
-        let dx = touchX - this.stickBase.x;
-        let dy = touchY - this.stickBase.y;
+    updateP1Stick(touchX, touchY) {
+        let dx = touchX - this.p1.stickBase.x;
+        let dy = touchY - this.p1.stickBase.y;
         const dist = Math.hypot(dx, dy);
 
-        if (dist > this.stickRadius) {
-            const ratio = this.stickRadius / dist;
+        if (dist > this.p1.stickRadius) {
+            const ratio = this.p1.stickRadius / dist;
             dx *= ratio;
             dy *= ratio;
         }
-
-        this.stickPos.x = dx;
-        this.stickPos.y = dy;
-        this.moveVector.x = dx / this.stickRadius;
-        this.moveVector.y = dy / this.stickRadius;
+        this.p1.stickPos.x = dx;
+        this.p1.stickPos.y = dy;
+        this.p1.moveVector.x = dx / this.p1.stickRadius;
+        this.p1.moveVector.y = dy / this.p1.stickRadius;
     }
 
-    // タップ情報のクリア（1フレームごとに呼ぶ）
+    updateP2Input() {
+        // activeTouchesの内容を集計してベクトル化
+        let vx = 0;
+        let vy = 0;
+        let fire = false;
+
+        Object.values(this.p2.activeTouches).forEach(btnId => {
+            if (btnId === 'U') vy = -1;
+            if (btnId === 'D') vy = 1;
+            if (btnId === 'L') vx = -1;
+            if (btnId === 'R') vx = 1;
+            if (btnId === 'F') fire = true;
+        });
+
+        // 斜め移動の正規化
+        if (vx !== 0 && vy !== 0) {
+            const len = Math.hypot(vx, vy);
+            vx /= len;
+            vy /= len;
+        }
+
+        this.p2.moveVector.x = vx;
+        this.p2.moveVector.y = vy;
+        this.p2.btnActive = fire;
+    }
+
     clearTap() {
         this.lastTap = null;
     }
 
     draw(ctx) {
-        // スティック
+        // --- Draw P1 UI ---
+        // Stick Base
         ctx.beginPath();
-        ctx.arc(this.stickBase.x, this.stickBase.y, this.stickRadius, 0, Math.PI * 2);
+        ctx.arc(this.p1.stickBase.x, this.p1.stickBase.y, this.p1.stickRadius, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
         ctx.fill();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.strokeStyle = 'rgba(100, 100, 255, 0.5)';
         ctx.stroke();
 
+        // Stick Knob
         ctx.beginPath();
-        ctx.arc(this.stickBase.x + this.stickPos.x, this.stickBase.y + this.stickPos.y, this.knobRadius, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.arc(this.p1.stickBase.x + this.p1.stickPos.x, this.p1.stickBase.y + this.p1.stickPos.y, 30, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(100, 100, 255, 0.8)';
         ctx.fill();
 
-        // 射撃ボタン
+        // Fire Button
         ctx.beginPath();
-        ctx.arc(this.btnPos.x, this.btnPos.y, this.btnRadius, 0, Math.PI * 2);
-        ctx.fillStyle = this.btnActive ? 'rgba(255, 50, 50, 0.8)' : 'rgba(255, 50, 50, 0.4)';
+        ctx.arc(this.p1.btnPos.x, this.p1.btnPos.y, this.p1.btnRadius, 0, Math.PI * 2);
+        ctx.fillStyle = this.p1.btnActive ? 'rgba(100, 100, 255, 0.8)' : 'rgba(100, 100, 255, 0.4)';
         ctx.fill();
         ctx.strokeStyle = 'white';
         ctx.stroke();
-        
         ctx.fillStyle = 'white';
         ctx.font = '16px Arial';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('FIRE', this.btnPos.x, this.btnPos.y);
+        ctx.fillText('P1 FIRE', this.p1.btnPos.x, this.p1.btnPos.y);
+
+        // --- Draw P2 UI ---
+        this.p2.buttons.forEach(btn => {
+            ctx.fillStyle = 'rgba(100, 255, 100, 0.5)';
+            // 押されているかチェック
+            const isPressed = Object.values(this.p2.activeTouches).includes(btn.id);
+            if (isPressed) ctx.fillStyle = 'rgba(100, 255, 100, 0.9)';
+            
+            ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
+            
+            ctx.fillStyle = '#000';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(btn.id, btn.x + btn.w/2, btn.y + btn.h/2);
+        });
+        
+        ctx.fillStyle = '#FFF';
+        ctx.fillText("P2", this.canvas.width - 50, 15);
     }
 }
 
 /**
  * Bulletクラス
+ * ownerId: 1=P1, 2=P2
  */
 class Bullet {
-    constructor(x, y, vx, vy, isPlayerBullet) {
+    constructor(x, y, vx, vy, ownerId) {
         this.x = x;
         this.y = y;
         this.vx = vx;
         this.vy = vy;
-        this.radius = 5;
-        this.isPlayerBullet = isPlayerBullet;
+        this.radius = 6;
+        this.ownerId = ownerId;
         this.active = true;
     }
 
@@ -209,58 +291,56 @@ class Bullet {
     draw(ctx) {
         ctx.beginPath();
         ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-        ctx.fillStyle = this.isPlayerBullet ? '#FFFF00' : '#FF00FF';
+        // 色分け
+        if (this.ownerId === 1) ctx.fillStyle = '#8888FF'; // P1: 薄青
+        else if (this.ownerId === 2) ctx.fillStyle = '#88FF88'; // P2: 薄緑
+        else ctx.fillStyle = '#FF00FF'; // Enemy
         ctx.fill();
     }
 }
 
 /**
  * Playerクラス
- * 残機、無敵状態の管理を追加
  */
 class Player {
-    constructor(x, y) {
-        this.startX = x; // リスポーン位置用
+    constructor(id, x, y, color) {
+        this.id = id; // 1 or 2
+        this.startX = x;
         this.startY = y;
         this.x = x;
         this.y = y;
+        this.color = color;
         this.radius = 15;
         this.speed = 5;
         
-        // ステータス
         this.maxHp = 100;
         this.hp = this.maxHp;
-        this.lives = 3; // 残機
+        this.lives = 3;
         
-        // 状態フラグ
-        this.isDead = false;         // 死亡中（リスポーン待ち）
-        this.invincibleUntil = 0;    // この時間まで無敵
+        this.isDead = false;
+        this.invincibleUntil = 0;
 
-        // 射撃管理
         this.lastShotTime = 0;
         this.shotInterval = 150;
     }
 
-    // リスポーン処理
     respawn() {
         this.x = this.startX;
         this.y = this.startY;
         this.hp = this.maxHp;
         this.isDead = false;
-        this.invincibleUntil = Date.now() + 3000; // 3秒間無敵
+        this.invincibleUntil = Date.now() + 3000;
     }
 
-    // ダメージ処理
     takeDamage(amount) {
-        if (this.isDead || this.isInvincible()) return;
+        if (this.isDead || this.isInvincible()) return false;
 
         this.hp -= amount;
         if (this.hp <= 0) {
             this.hp = 0;
             this.lives--;
             this.isDead = true;
-            // 戻り値で死亡したことを通知
-            return true;
+            return true; // 死亡通知
         }
         return false;
     }
@@ -269,19 +349,19 @@ class Player {
         return Date.now() < this.invincibleUntil;
     }
 
-    update(input, width, height, bullets) {
-        if (this.isDead) return; // 死亡中は操作不可
+    update(inputData, width, height, bullets) {
+        if (this.isDead) return;
 
         // 移動
-        this.x += input.moveVector.x * this.speed;
-        this.y += input.moveVector.y * this.speed;
+        this.x += inputData.moveVector.x * this.speed;
+        this.y += inputData.moveVector.y * this.speed;
 
         // 画面端の制限
         this.x = Math.max(this.radius, Math.min(width - this.radius, this.x));
         this.y = Math.max(this.radius, Math.min(height - this.radius, this.y));
 
         // 射撃
-        if (input.btnActive) {
+        if (inputData.btnActive) {
             const now = Date.now();
             if (now - this.lastShotTime > this.shotInterval) {
                 this.shoot(bullets);
@@ -291,7 +371,22 @@ class Player {
     }
 
     shoot(bullets) {
-        bullets.push(new Bullet(this.x, this.y - 20, 0, -10, true));
+        // P2は下向き、P1は上向きにする？ 対戦なので相手の方を向かせたいが
+        // シンプルにするため、P1は上、P2は下、あるいは「移動方向」に撃つのが自然だが
+        // トップダウンシューター（対面）想定で
+        // P1(左側スタート) -> 右へ発射、 P2(右側スタート) -> 左へ発射
+        // とりあえず今回は初期位置から「相手方向」に固定してみる、または
+        // 上下に配置して撃ち合いにするのがスマホ横画面だと自然。
+        // -> P1(左) vs P2(右) の配置にします。
+
+        let vx = 0;
+        let vy = 0;
+        const speed = 12;
+
+        if (this.id === 1) vx = speed;  // P1は右へ
+        if (this.id === 2) vx = -speed; // P2は左へ
+
+        bullets.push(new Bullet(this.x, this.y, vx, vy, this.id));
     }
 
     draw(ctx) {
@@ -299,74 +394,30 @@ class Player {
 
         ctx.save();
         
-        // 無敵中は半透明にする
         if (this.isInvincible()) {
             ctx.globalAlpha = 0.5;
-            // 無敵テキスト表示
             ctx.fillStyle = '#FFF';
             ctx.font = '10px Arial';
             ctx.textAlign = 'center';
             ctx.fillText('INVINCIBLE', this.x, this.y - 25);
         }
 
-        // 本体
         ctx.beginPath();
-        ctx.moveTo(this.x, this.y - this.radius);
-        ctx.lineTo(this.x + this.radius, this.y + this.radius);
-        ctx.lineTo(this.x - this.radius, this.y + this.radius);
-        ctx.closePath();
-        ctx.fillStyle = '#00CCFF';
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
         ctx.fill();
+        
+        // 向きがわかるように少し装飾
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        if (this.id === 1) ctx.fillRect(this.x, this.y - 5, 10, 10); // 右向きの目
+        if (this.id === 2) ctx.fillRect(this.x - 10, this.y - 5, 10, 10); // 左向きの目
 
         ctx.restore();
     }
 }
 
 /**
- * Enemyクラス
- */
-class Enemy {
-    constructor(x, y) {
-        this.x = x;
-        this.y = y;
-        this.radius = 15;
-        this.speed = 2;
-        this.active = true;
-        this.lastShotTime = Date.now();
-        this.shotInterval = 2000;
-    }
-
-    update(player, bullets) {
-        if (!player.isDead) {
-            const dx = player.x - this.x;
-            const dy = player.y - this.y;
-            const dist = Math.hypot(dx, dy);
-            
-            if (dist > 0) {
-                this.x += (dx / dist) * this.speed;
-                this.y += (dy / dist) * this.speed;
-            }
-
-            const now = Date.now();
-            if (now - this.lastShotTime > this.shotInterval) {
-                const bulletSpeed = 6;
-                bullets.push(new Bullet(this.x, this.y, (dx / dist) * bulletSpeed, (dy / dist) * bulletSpeed, false));
-                this.lastShotTime = now;
-            }
-        }
-    }
-
-    draw(ctx) {
-        ctx.beginPath();
-        ctx.rect(this.x - 15, this.y - 15, 30, 30);
-        ctx.fillStyle = '#FF4444';
-        ctx.fill();
-    }
-}
-
-/**
  * Gameクラス
- * リスポーン、ゲームオーバー、リトライ制御を追加
  */
 class Game {
     constructor() {
@@ -379,36 +430,31 @@ class Game {
 
         this.initGame();
 
-        // ループ開始
         this.loop = this.loop.bind(this);
         requestAnimationFrame(this.loop);
     }
 
     initGame() {
-        // ゲーム状態の初期化
-        this.player = new Player(this.canvas.width / 2, this.canvas.height / 2);
+        // P1: 左側、青
+        this.p1 = new Player(1, 100, this.canvas.height / 2, '#00CCFF');
+        // P2: 右側、緑
+        this.p2 = new Player(2, this.canvas.width - 100, this.canvas.height / 2, '#00FF66');
+        
         this.bullets = [];
-        this.enemies = [];
+        this.winner = null; // 1 or 2
         this.isGameOver = false;
-        this.respawnTimer = 0; // リスポーン待ち時間用
-        this.lastSpawnTime = 0;
+
+        // リスポーン管理用
+        this.p1RespawnTimer = 0;
+        this.p2RespawnTimer = 0;
     }
 
     resize() {
         this.canvas.width = window.innerWidth;
         this.canvas.height = window.innerHeight;
         if (this.input) this.input.updateLayout(this.canvas.width, this.canvas.height);
-        // 画面サイズ変更時にプレイヤー位置が画面外に行かないようにする等は省略（リスポーン時に中央に戻るため）
-    }
-
-    spawnEnemy() {
-        const now = Date.now();
-        if (now - this.lastSpawnTime > 1500) {
-            const x = Math.random() * this.canvas.width;
-            const y = -50;
-            this.enemies.push(new Enemy(x, y));
-            this.lastSpawnTime = now;
-        }
+        
+        // 画面リサイズ時に位置リセット等は行わない（戦闘中はずれる可能性があるため）
     }
 
     checkCollisions() {
@@ -417,131 +463,125 @@ class Game {
         this.bullets.forEach(b => {
             if (!b.active) return;
 
-            if (b.isPlayerBullet) {
-                // プレイヤーの弾 -> 敵
-                this.enemies.forEach(e => {
-                    if (!e.active) return;
-                    const dist = Math.hypot(b.x - e.x, b.y - e.y);
-                    if (dist < b.radius + e.radius + 10) {
-                        e.active = false;
-                        b.active = false;
-                    }
-                });
-            } else {
-                // 敵の弾 -> プレイヤー
-                const dist = Math.hypot(b.x - this.player.x, b.y - this.player.y);
-                if (dist < b.radius + this.player.radius) {
+            // 弾の持ち主以外のプレイヤーに当たり判定
+            let target = null;
+            if (b.ownerId === 1) target = this.p2;
+            else if (b.ownerId === 2) target = this.p1;
+
+            if (target && !target.isDead) {
+                const dist = Math.hypot(b.x - target.x, b.y - target.y);
+                if (dist < b.radius + target.radius) {
+                    b.active = false;
                     // ダメージ処理
-                    if (this.player.takeDamage(20)) {
-                        // 死亡した場合（HP0）
-                        b.active = false;
-                        this.handlePlayerDeath();
-                    } else if (!this.player.isInvincible()) {
-                        // 生きていてダメージを受けた場合
-                        b.active = false;
+                    if (target.takeDamage(20)) {
+                        // 死亡した場合
+                        this.handlePlayerDeath(target);
                     }
                 }
             }
         });
     }
 
-    handlePlayerDeath() {
-        if (this.player.lives < 0) {
+    handlePlayerDeath(player) {
+        if (player.lives < 0) {
             this.isGameOver = true;
+            this.winner = (player.id === 1) ? 2 : 1; // 相手の勝ち
         } else {
-            // 2秒後にリスポーンするためのタイマーセット
-            this.respawnTimer = Date.now() + 2000;
+            // リスポーンタイマー設定
+            const respawnTime = Date.now() + 2000;
+            if (player.id === 1) this.p1RespawnTimer = respawnTime;
+            else this.p2RespawnTimer = respawnTime;
         }
     }
 
     update() {
-        // ゲームオーバー時のリトライ判定
         if (this.isGameOver) {
             this.checkRetry();
-            this.input.clearTap(); // タップ情報の破棄
+            this.input.clearTap();
             return;
         }
 
-        // リスポーン待ち処理
-        if (this.player.isDead) {
-            if (Date.now() > this.respawnTimer && this.player.lives >= 0) {
-                // 中央位置を再設定してリスポーン
-                this.player.startX = this.canvas.width / 2;
-                this.player.startY = this.canvas.height / 2;
-                this.player.respawn();
-            } else if (this.player.lives < 0) {
-                this.isGameOver = true;
-            }
+        // リスポーン処理 P1
+        if (this.p1.isDead && this.p1.lives >= 0) {
+            if (Date.now() > this.p1RespawnTimer) this.p1.respawn();
+        }
+        // リスポーン処理 P2
+        if (this.p2.isDead && this.p2.lives >= 0) {
+            if (Date.now() > this.p2RespawnTimer) this.p2.respawn();
         }
 
-        this.spawnEnemy();
-        this.player.update(this.input, this.canvas.width, this.canvas.height, this.bullets);
+        // プレイヤー更新 (InputManagerから各プレイヤー用の入力を渡す)
+        this.p1.update(this.input.p1, this.canvas.width, this.canvas.height, this.bullets);
+        this.p2.update(this.input.p2, this.canvas.width, this.canvas.height, this.bullets);
 
+        // 弾更新
         this.bullets.forEach(b => b.update(this.canvas.width, this.canvas.height));
         this.bullets = this.bullets.filter(b => b.active);
 
-        this.enemies.forEach(e => e.update(this.player, this.bullets));
-        this.enemies = this.enemies.filter(e => e.active);
-
         this.checkCollisions();
-        
         this.input.clearTap();
     }
 
     checkRetry() {
-        // リトライボタン領域（画面中央下部）
         const btnW = 160;
         const btnH = 50;
         const btnX = this.canvas.width / 2 - btnW / 2;
-        const btnY = this.canvas.height / 2 + 60;
+        const btnY = this.canvas.height / 2 + 80;
 
         if (this.input.lastTap) {
             const tap = this.input.lastTap;
             if (tap.x >= btnX && tap.x <= btnX + btnW &&
                 tap.y >= btnY && tap.y <= btnY + btnH) {
-                this.initGame(); // リセット
+                this.initGame();
             }
         }
     }
 
     drawUI() {
-        // HPバー背景
-        this.ctx.fillStyle = '#555';
-        this.ctx.fillRect(20, 20, 200, 20);
-        
-        // HPバー現在値
-        const hpPercent = this.player.hp / this.player.maxHp;
-        this.ctx.fillStyle = hpPercent > 0.3 ? '#00FF00' : '#FF0000';
-        this.ctx.fillRect(20, 20, 200 * hpPercent, 20);
-        
-        // HP枠線
-        this.ctx.strokeStyle = '#FFF';
-        this.ctx.lineWidth = 2;
-        this.ctx.strokeRect(20, 20, 200, 20);
+        const drawBar = (player, x, y, align) => {
+            const width = 150;
+            const height = 15;
+            
+            // Background
+            this.ctx.fillStyle = '#555';
+            this.ctx.fillRect(x, y, width, height);
+            
+            // Foreground
+            const hpPercent = player.hp / player.maxHp;
+            this.ctx.fillStyle = player.id === 1 ? '#00CCFF' : '#00FF66';
+            this.ctx.fillRect(x, y, width * hpPercent, height);
+            
+            // Stroke
+            this.ctx.strokeStyle = '#FFF';
+            this.ctx.strokeRect(x, y, width, height);
+            
+            // Text
+            this.ctx.fillStyle = '#FFF';
+            this.ctx.font = '14px Arial';
+            this.ctx.textAlign = 'left';
+            this.ctx.fillText(`P${player.id} Lives: ${Math.max(0, player.lives)}`, x, y + 30);
+        };
 
-        // 残機表示
-        this.ctx.fillStyle = '#FFF';
-        this.ctx.font = '20px Arial';
-        this.ctx.textAlign = 'left';
-        this.ctx.fillText(`Lives: ${Math.max(0, this.player.lives)}`, 20, 70);
+        drawBar(this.p1, 20, 20); // P1 Left Top
+        drawBar(this.p2, this.canvas.width - 170, 20); // P2 Right Top
     }
 
     drawGameOver() {
         this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-        // GAME OVER テキスト
-        this.ctx.fillStyle = '#FFF';
+        // WINNER テキスト
+        this.ctx.fillStyle = this.winner === 1 ? '#00CCFF' : '#00FF66';
         this.ctx.font = 'bold 40px Arial';
         this.ctx.textAlign = 'center';
         this.ctx.textBaseline = 'middle';
-        this.ctx.fillText('GAME OVER', this.canvas.width / 2, this.canvas.height / 2 - 20);
+        this.ctx.fillText(`PLAYER ${this.winner} WINS!`, this.canvas.width / 2, this.canvas.height / 2 - 20);
 
-        // RETRY ボタン描画
+        // RETRY ボタン
         const btnW = 160;
         const btnH = 50;
         const btnX = this.canvas.width / 2 - btnW / 2;
-        const btnY = this.canvas.height / 2 + 60;
+        const btnY = this.canvas.height / 2 + 80;
 
         this.ctx.fillStyle = '#FFF';
         this.ctx.fillRect(btnX, btnY, btnW, btnH);
@@ -555,8 +595,8 @@ class Game {
         this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
         if (!this.isGameOver) {
-            this.player.draw(this.ctx);
-            this.enemies.forEach(e => e.draw(this.ctx));
+            this.p1.draw(this.ctx);
+            this.p2.draw(this.ctx);
             this.bullets.forEach(b => b.draw(this.ctx));
             this.drawUI();
             this.input.draw(this.ctx);
@@ -572,7 +612,6 @@ class Game {
     }
 }
 
-// ゲーム起動
 window.onload = () => {
     new Game();
 };
