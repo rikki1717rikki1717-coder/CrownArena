@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Low Latency Firestore Shooter</title>
+    <title>Firestore Shooter Lag-Free</title>
     <style>
         body {
             margin: 0;
@@ -11,7 +11,7 @@
             overflow: hidden;
             background-color: #1a1a1a;
             color: white;
-            font-family: 'Segoe UI', monospace;
+            font-family: monospace;
             touch-action: none;
             user-select: none;
         }
@@ -41,12 +41,11 @@
             border-radius: 12px;
             text-align: center;
             border: 1px solid #444;
-            width: 320px;
+            width: 300px;
             max-width: 90%;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
 
-        h1 { margin: 0 0 20px 0; color: #00e5ff; font-size: 22px; }
+        h1 { margin: 0 0 20px 0; color: #00e5ff; font-size: 20px; }
 
         input {
             width: 100%;
@@ -55,11 +54,10 @@
             background: #333;
             border: 1px solid #555;
             color: white;
-            border-radius: 6px;
+            border-radius: 4px;
             box-sizing: border-box;
-            font-size: 18px;
+            font-size: 16px;
             text-align: center;
-            letter-spacing: 2px;
         }
 
         button {
@@ -67,30 +65,28 @@
             padding: 12px;
             margin-bottom: 10px;
             border: none;
-            border-radius: 6px;
+            border-radius: 4px;
             font-size: 16px;
             font-weight: bold;
             cursor: pointer;
             color: white;
-            transition: transform 0.1s;
         }
-        button:active { transform: scale(0.98); }
+
         .btn-host { background: #0078d7; }
         .btn-join { background: #107c10; }
 
         #room-display {
-            font-size: 36px;
+            font-size: 32px;
             font-weight: bold;
             color: #ffeb3b;
             letter-spacing: 5px;
             margin: 15px 0;
             background: #000;
-            padding: 15px;
-            border-radius: 8px;
-            border: 2px dashed #555;
+            padding: 10px;
+            border-radius: 4px;
         }
 
-        #status-msg { margin-top: 10px; color: #aaa; font-size: 13px; }
+        #status-msg { margin-top: 10px; color: #aaa; font-size: 12px; }
 
         /* HUD */
         #hud {
@@ -100,20 +96,17 @@
             pointer-events: none;
             font-size: 14px;
             text-shadow: 1px 1px 2px black;
-            font-weight: bold;
         }
-        .hp-bar-bg { display: inline-block; width: 100px; height: 10px; background: #555; border: 1px solid #fff; }
-        .hp-bar-fg { height: 100%; background: #0f0; transition: width 0.2s; }
     </style>
 </head>
 <body>
 
     <div id="ui-layer">
         <div class="panel" id="panel-menu">
-            <h1>Lag-Free Shooter</h1>
+            <h1>Lag-Free Battle</h1>
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
             <div style="margin: 10px 0; color:#666;">- OR -</div>
-            <input type="number" id="input-room" placeholder="Enter Room ID">
+            <input type="number" id="input-room" placeholder="4-Digit Room ID">
             <button class="btn-join" id="btn-join">Join Room</button>
             <div id="status-msg">Ready</div>
         </div>
@@ -122,14 +115,14 @@
             <h1>Waiting for P2...</h1>
             <div>Room ID:</div>
             <div id="room-display">----</div>
-            <div style="font-size: 12px; color: #aaa; margin-top: 10px;">Share this ID</div>
+            <div style="font-size: 12px; color: #aaa;">Share this ID with your friend</div>
         </div>
     </div>
 
-    <div id="hud" style="display: none;">
-        <div>P1 <div class="hp-bar-bg"><div id="hud-hp-p1" class="hp-bar-fg" style="width: 100%;"></div></div></div>
-        <div style="margin-top:5px;">P2 <div class="hp-bar-bg"><div id="hud-hp-p2" class="hp-bar-fg" style="width: 100%;"></div></div></div>
-        <div style="margin-top:5px; font-size:10px; color:#aaa;">Room: <span id="hud-room"></span></div>
+    <div id="hud">
+        P1 HP: <span id="hp-p1">100</span> | P2 HP: <span id="hp-p2">100</span>
+        <br>
+        Room: <span id="hud-room">----</span>
     </div>
 
     <canvas id="gameCanvas"></canvas>
@@ -155,6 +148,7 @@
 
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
+    console.log("Firebase initialized");
 
     // ---------------------------------------------------------
     // 2. Constants & Globals
@@ -162,59 +156,56 @@
     const CANVAS = document.getElementById('gameCanvas');
     const CTX = CANVAS.getContext('2d');
     
-    // Game Parameters
+    // Game Config
     const PLAYER_RADIUS = 20;
-    const BULLET_RADIUS = 6;
+    const BULLET_RADIUS = 5;
     const MOVE_SPEED = 5;
     const BULLET_SPEED = 12;
-    const FIRE_COOLDOWN = 300; // ms
-    const LERP_FACTOR = 0.2; // 補間係数 (0.1~0.3くらいが滑らか)
-    const SYNC_INTERVAL = 100; // ms (通信頻度)
+    const FIRE_RATE = 200; // ms (連射間隔)
+    const SYNC_INTERVAL = 50; // ms (座標同期頻度)
 
     // ---------------------------------------------------------
-    // 3. Game Logic
+    // 3. Game Logic Class
     // ---------------------------------------------------------
     class Game {
         constructor() {
             this.roomId = null;
             this.isHost = false; 
             this.myId = null;    // 'p1' or 'p2'
-            this.opponentId = null;
-
-            // ローカルで管理するゲーム状態（描画用）
-            this.localState = {
+            
+            // ゲーム状態（座標などはここで管理）
+            this.state = {
                 players: {
-                    p1: { x: 100, y: 100, hp: 100, targetX: 100, targetY: 100, lastShootTime: 0, active: false },
-                    p2: { x: 300, y: 100, hp: 100, targetX: 300, targetY: 100, lastShootTime: 0, active: false }
+                    p1: { x: 100, y: 100, hp: 100, lives: 3, isShooting: false, active: false, lastFire: 0 },
+                    p2: { x: 300, y: 100, hp: 100, lives: 3, isShooting: false, active: false, lastFire: 0 }
                 },
-                bullets: [] // 弾はローカルで計算（同期しない）
+                status: "waiting"
             };
 
-            // Network State Cache (差分検知用)
-            this.lastNetworkState = {
-                p1: { lastShootTime: 0 },
-                p2: { lastShootTime: 0 }
-            };
+            // 弾丸はローカルで管理（Firestoreには保存しない！）
+            // HostもGuestも自分の画面でそれぞれ弾を動かす
+            this.localBullets = []; 
 
-            // Input & Control
+            // Input
             this.input = { x: 0, y: 0, fire: false };
             this.touchId = null;
             this.stickBase = { x: 100, y: 300 };
+            
+            // Timers
             this.lastSyncTime = 0;
-            this.lastFireTime = 0; // ローカル連射制限
 
             this.resize();
             window.addEventListener('resize', () => this.resize());
             this.setupInputs();
-            this.bindButtons();
-
-            // UI Elements
-            this.uiLayer = document.getElementById('ui-layer');
+            
+            // UI References
             this.uiMenu = document.getElementById('panel-menu');
             this.uiWait = document.getElementById('panel-wait');
-            this.hud = document.getElementById('hud');
+            this.uiLayer = document.getElementById('ui-layer');
+            
+            this.bindButtons();
 
-            // Game Loop
+            // Start Loop
             requestAnimationFrame((t) => this.loop(t));
         }
 
@@ -224,32 +215,33 @@
             this.stickBase = { x: 120, y: CANVAS.height - 120 };
         }
 
-        // --- Network Logic ---
+        // --- Network Actions ---
 
         async createRoom() {
             this.roomId = Math.floor(1000 + Math.random() * 9000).toString();
             this.isHost = true;
             this.myId = 'p1';
-            this.opponentId = 'p2';
+            
+            this.state.players.p1.active = true;
+            this.state.players.p1.x = 100;
+            this.state.players.p2.active = false;
 
-            // 初期データ構造 (弾配列は持たない)
+            // 初期データ：弾丸(bullets)配列は含めない（ラグの原因になるため）
             const initialData = {
-                status: "waiting",
                 players: {
-                    p1: { x: 100, y: 100, hp: 100, lastShootTime: 0, active: true },
-                    p2: { x: 300, y: 100, hp: 100, lastShootTime: 0, active: false }
-                }
+                    p1: { x: 100, y: 100, hp: 100, isShooting: false, active: true },
+                    p2: { x: 300, y: 100, hp: 100, isShooting: false, active: false }
+                },
+                status: "waiting"
             };
 
             try {
                 await setDoc(doc(db, "rooms", this.roomId), initialData);
-                this.localState.players.p1.active = true;
                 this.uiMenu.style.display = 'none';
                 this.uiWait.style.display = 'block';
                 document.getElementById('room-display').innerText = this.roomId;
                 document.getElementById('hud-room').innerText = this.roomId;
-                
-                this.subscribe();
+                this.subscribeToRoom();
             } catch (e) {
                 alert("Create Error: " + e.message);
             }
@@ -260,208 +252,194 @@
             try {
                 const snap = await getDoc(docRef);
                 if (!snap.exists()) {
-                    alert("Room not found");
+                    alert("Room not found!");
                     return;
                 }
-                
                 this.roomId = id;
                 this.isHost = false;
                 this.myId = 'p2';
-                this.opponentId = 'p1';
 
-                // P2参加表明 (status: playing)
+                this.state.players.p2.active = true;
+                this.state.players.p2.x = CANVAS.width - 100;
+
+                // 参加通知
                 await updateDoc(docRef, {
-                    "status": "playing",
                     "players.p2.active": true,
-                    "players.p2.x": CANVAS.width - 100, // 初期位置調整
-                    "players.p2.y": CANVAS.height / 2
+                    "players.p2.x": this.state.players.p2.x,
+                    "status": "playing"
                 });
 
-                // ローカル座標も初期化
-                this.localState.players.p2.x = CANVAS.width - 100;
-                this.localState.players.p2.y = CANVAS.height / 2;
-                this.localState.players.p2.active = true;
-
                 document.getElementById('hud-room').innerText = this.roomId;
-                this.subscribe();
-
+                this.subscribeToRoom();
             } catch (e) {
-                alert("Join Error: " + e.message);
+                console.error(e);
+                alert("Error joining room");
             }
         }
 
-        subscribe() {
-            onSnapshot(doc(db, "rooms", this.roomId), (snap) => {
-                if (!snap.exists()) return;
-                const data = snap.data();
-
-                // 1. ゲーム開始検知
-                if (data.status === "playing" && this.uiLayer.style.display !== 'none') {
-                    this.uiLayer.style.display = 'none';
-                    this.hud.style.display = 'block';
+        subscribeToRoom() {
+            console.log("Subscribing...");
+            onSnapshot(doc(db, "rooms", this.roomId), (docSnap) => {
+                if (!docSnap.exists()) return;
+                const data = docSnap.data();
+                
+                // UI遷移
+                if (data.status === "playing") {
+                    if (this.uiLayer.style.display !== 'none') {
+                        this.uiLayer.style.display = 'none';
+                    }
                 }
 
-                // 2. データ同期 (Interpolation & Event Trigger)
-                ['p1', 'p2'].forEach(pid => {
-                    const remoteData = data.players[pid];
-                    const localP = this.localState.players[pid];
-                    
-                    if (remoteData) {
-                        // アクティブ状態同期
-                        localP.active = remoteData.active;
+                // --- データ同期 (軽量化) ---
+                // 弾丸配列は同期しない。
+                // 相手の「座標」と「射撃フラグ(isShooting)」と「HP」だけ同期する。
 
-                        // HP同期 (Hostは計算元なので上書きしない / GuestはHostの値を受け取る)
-                        if (!this.isHost || pid === 'p2') { 
-                            // 注意: HostはP2のHPも計算するが、万が一の整合性のためP2HPは自分で計算した値を使う
-                            // GuestはP1, P2両方のHPをHostから受け取る
-                            if (!this.isHost) {
-                                localP.hp = remoteData.hp;
-                            }
-                        }
-
-                        // 座標同期 (自分以外のプレイヤーのみターゲット更新)
-                        if (pid !== this.myId) {
-                            localP.targetX = remoteData.x;
-                            localP.targetY = remoteData.y;
-                        }
-
-                        // 発射同期 (Event Trigger)
-                        // lastShootTimeが変化していたら、そのプレイヤーの位置から弾を発射
-                        if (remoteData.lastShootTime > this.lastNetworkState[pid].lastShootTime) {
-                            // 自分自身の場合はクライアント予測で既に撃っているため無視
-                            if (pid !== this.myId) {
-                                this.spawnBullet(pid, localP.x, localP.y); // 現在の補間座標から発射
-                            }
-                            this.lastNetworkState[pid].lastShootTime = remoteData.lastShootTime;
-                            localP.lastShootTime = remoteData.lastShootTime;
-                        }
+                if (this.isHost) {
+                    // Host (P1) は P2の動きを見る
+                    if (data.players.p2) {
+                        const p2 = this.state.players.p2;
+                        // 相手の座標を更新（補間なしで直接代入、頻度が高ければこれで十分）
+                        p2.x = data.players.p2.x;
+                        p2.y = data.players.p2.y;
+                        p2.isShooting = data.players.p2.isShooting; // 撃ってるかどうかだけ受け取る
+                        p2.active = data.players.p2.active;
                     }
-                });
+                } else {
+                    // Guest (P2) は P1の動きと、HPの正規データを見る
+                    if (data.players.p1) {
+                        const p1 = this.state.players.p1;
+                        p1.x = data.players.p1.x;
+                        p1.y = data.players.p1.y;
+                        p1.hp = data.players.p1.hp;
+                        p1.isShooting = data.players.p1.isShooting;
+                        p1.active = data.players.p1.active;
+                    }
+                    if (data.players.p2) {
+                        // 自分のHPはHostが計算するので、それを受け取る
+                        this.state.players.p2.hp = data.players.p2.hp;
+                        // activeフラグも同期
+                        this.state.players.p2.active = data.players.p2.active;
+                    }
+                }
                 
-                // HUD反映
-                this.updateHUD();
+                // HUD更新
+                document.getElementById('hp-p1').innerText = Math.floor(this.state.players.p1.hp);
+                document.getElementById('hp-p2').innerText = Math.floor(this.state.players.p2.hp);
             });
         }
 
-        async sync() {
+        async syncToFirestore() {
             if (!this.roomId) return;
             const ref = doc(db, "rooms", this.roomId);
-            const myP = this.localState.players[this.myId];
-            const opP = this.localState.players[this.opponentId];
+            const me = this.state.players[this.myId];
 
             try {
                 if (this.isHost) {
-                    // Host: 自分の座標 + 自分の発射時刻 + 両者のHP (権限あり)
+                    // Host: 自分のP1情報(座標+射撃フラグ) + 計算済みのHP
                     await updateDoc(ref, {
-                        "players.p1.x": Math.round(myP.x),
-                        "players.p1.y": Math.round(myP.y),
-                        "players.p1.lastShootTime": myP.lastShootTime,
-                        "players.p1.hp": myP.hp,
-                        "players.p2.hp": opP.hp // P2のHPもHostが管理して同期
+                        "players.p1.x": me.x,
+                        "players.p1.y": me.y,
+                        "players.p1.isShooting": me.isShooting,
+                        "players.p1.hp": this.state.players.p1.hp, // 自分のHP (被弾判定は自分でするのが理想だが今回はHost権限)
+                        "players.p2.hp": this.state.players.p2.hp  // 相手のHP
                     });
                 } else {
-                    // Guest: 自分の座標 + 自分の発射時刻のみ
+                    // Guest: 自分のP2情報(座標+射撃フラグ)のみ
                     await updateDoc(ref, {
-                        "players.p2.x": Math.round(myP.x),
-                        "players.p2.y": Math.round(myP.y),
-                        "players.p2.lastShootTime": myP.lastShootTime
+                        "players.p2.x": me.x,
+                        "players.p2.y": me.y,
+                        "players.p2.isShooting": me.isShooting
                     });
                 }
             } catch (e) {
-                console.warn("Sync skipped");
+                // 通信頻度が高いのでエラーはログに出さず無視してラグを防ぐ
             }
         }
 
-        // --- Game Actions ---
-
-        spawnBullet(ownerId, x, y) {
-            let vx = BULLET_SPEED;
-            if (ownerId === 'p2') vx = -BULLET_SPEED; // P2は左へ
-
-            this.localState.bullets.push({
-                x: x, y: y, vx: vx, vy: 0, owner: ownerId
-            });
-        }
+        // --- Game Loop ---
 
         update(dt) {
-            const me = this.localState.players[this.myId];
-            const op = this.localState.players[this.opponentId];
+            const now = Date.now();
 
-            // 1. 自分の移動 (Client Side Prediction)
-            if (me.active) {
+            // 1. 自分の移動更新 (Local Prediction)
+            const me = this.state.players[this.myId];
+            if (me) {
                 me.x += this.input.x * MOVE_SPEED;
                 me.y += this.input.y * MOVE_SPEED;
-                // 画面端制限
                 me.x = Math.max(20, Math.min(CANVAS.width - 20, me.x));
                 me.y = Math.max(20, Math.min(CANVAS.height - 20, me.y));
 
-                // 発射処理 (Client Prediction)
-                const now = Date.now();
-                if (this.input.fire && now - this.lastFireTime > FIRE_COOLDOWN) {
-                    this.spawnBullet(this.myId, me.x, me.y);
-                    me.lastShootTime = now; // ネットワーク同期用フラグ更新
-                    this.lastFireTime = now;
-                }
+                // 射撃フラグ更新
+                me.isShooting = this.input.fire;
             }
 
-            // 2. 相手の移動 (Interpolation)
-            if (op.active) {
-                // 現在位置から目標位置へ滑らかに移動 (Lerp)
-                op.x += (op.targetX - op.x) * LERP_FACTOR;
-                op.y += (op.targetY - op.y) * LERP_FACTOR;
-            }
+            // 2. 弾丸の生成と移動 (HostもGuestもローカルで計算！)
+            // これにより、弾の発射ラグがゼロになる
+            this.updateBullets(now);
 
-            // 3. 弾の更新 (全クライアントでローカル計算)
-            this.localState.bullets.forEach(b => {
-                b.x += b.vx;
-                b.y += b.vy;
-            });
-
-            // 4. 当たり判定 (Host Authority Only)
-            // Hostだけがダメージ計算を行い、HPを減らす。Guestは見た目だけ。
-            if (this.isHost) {
-                this.checkCollisions();
-            }
-
-            // 5. 弾の掃除
-            this.localState.bullets = this.localState.bullets.filter(b => 
-                b.x > -50 && b.x < CANVAS.width + 50 && !b.hit
-            );
-
-            // 6. Network Sync
-            const now = Date.now();
+            // 3. 定期的なネットワーク同期
             if (now - this.lastSyncTime > SYNC_INTERVAL) {
-                this.sync();
+                this.syncToFirestore();
                 this.lastSyncTime = now;
             }
         }
 
-        checkCollisions() {
-            this.localState.bullets.forEach(b => {
-                if (b.hit) return;
-
-                // ターゲット決定
-                const targetId = b.owner === 'p1' ? 'p2' : 'p1';
-                const target = this.localState.players[targetId];
-
-                if (target.active && target.hp > 0) {
-                    const dx = b.x - target.x;
-                    const dy = b.y - target.y;
-                    if (Math.hypot(dx, dy) < PLAYER_RADIUS + BULLET_RADIUS) {
-                        // HIT!
-                        b.hit = true; // 弾消去フラグ
-                        target.hp -= 10;
-                        if (target.hp <= 0) target.hp = 0; // ゲームオーバー処理は今回はHP0止め
+        // 弾のロジック (Client Prediction & Server Authority Hybrid)
+        updateBullets(now) {
+            // A. 弾の生成
+            // P1, P2 それぞれについて「isShooting」なら弾を生成する
+            ['p1', 'p2'].forEach(pid => {
+                const p = this.state.players[pid];
+                if (p.active && p.isShooting) {
+                    // 連射制限
+                    if (now - (p.lastFire || 0) > FIRE_RATE) {
+                        let vx = (pid === 'p1') ? BULLET_SPEED : -BULLET_SPEED;
+                        // ローカル配列に追加
+                        this.localBullets.push({
+                            x: p.x, y: p.y, vx: vx, vy: 0, owner: pid
+                        });
+                        p.lastFire = now;
                     }
                 }
             });
-        }
 
-        updateHUD() {
-            const p1 = this.localState.players.p1;
-            const p2 = this.localState.players.p2;
-            document.getElementById('hud-hp-p1').style.width = p1.hp + "%";
-            document.getElementById('hud-hp-p2').style.width = p2.hp + "%";
+            // B. 弾の移動
+            this.localBullets.forEach(b => {
+                b.x += b.vx;
+                b.y += b.vy;
+            });
+
+            // C. 画面外削除
+            this.localBullets = this.localBullets.filter(b => 
+                b.x > 0 && b.x < CANVAS.width && b.y > 0 && b.y < CANVAS.height
+            );
+
+            // D. 当たり判定 (HostのみがHPを減らす権限を持つ)
+            if (this.isHost) {
+                this.localBullets = this.localBullets.filter(b => {
+                    let hit = false;
+                    const targetId = b.owner === 'p1' ? 'p2' : 'p1';
+                    const target = this.state.players[targetId];
+
+                    if (target.active && target.hp > 0) {
+                        const dx = b.x - target.x;
+                        const dy = b.y - target.y;
+                        if (Math.hypot(dx, dy) < PLAYER_RADIUS + BULLET_RADIUS) {
+                            hit = true;
+                            // HPを減らす
+                            target.hp -= 10; 
+                            if (target.hp <= 0) target.hp = 100; // 簡易リスポーン
+                            // ここで減らしたHPは syncToFirestore でGuestに送られる
+                        }
+                    }
+                    return !hit; // 当たったら弾を消す
+                });
+            } else {
+                // Guest側は当たり判定の計算をしない（Hostの結果を待つ）
+                // ただし、見た目上弾が貫通するのは変なので、簡易的に消しても良いが
+                // 位置ズレ防止のため、Guest側は「壁にあたって消える」だけに留めるのが無難
+                // 今回はシンプルに移動のみさせる（HPは同期される）
+            }
         }
 
         draw() {
@@ -469,63 +447,55 @@
             CTX.fillStyle = '#222';
             CTX.fillRect(0, 0, CANVAS.width, CANVAS.height);
 
-            // Grid
-            CTX.strokeStyle = '#333';
-            CTX.lineWidth = 1;
-            for(let i=0; i<CANVAS.width; i+=50) { CTX.beginPath(); CTX.moveTo(i,0); CTX.lineTo(i, CANVAS.height); CTX.stroke(); }
-            for(let i=0; i<CANVAS.height; i+=50) { CTX.beginPath(); CTX.moveTo(0,i); CTX.lineTo(CANVAS.width, i); CTX.stroke(); }
+            // Players
+            ['p1', 'p2'].forEach(pid => {
+                const p = this.state.players[pid];
+                if (!p.active) return;
+                
+                CTX.beginPath();
+                CTX.arc(p.x, p.y, PLAYER_RADIUS, 0, Math.PI*2);
+                CTX.fillStyle = pid === 'p1' ? '#00ccff' : '#00ff00';
+                CTX.fill();
+                
+                // HP Bar
+                CTX.fillStyle = 'red';
+                CTX.fillRect(p.x - 20, p.y - 35, 40, 5);
+                CTX.fillStyle = '#0f0';
+                CTX.fillRect(p.x - 20, p.y - 35, 40 * (Math.max(0, p.hp)/100), 5);
+            });
 
-            // Bullets
-            CTX.fillStyle = '#ffff00';
-            this.localState.bullets.forEach(b => {
+            // Bullets (Local Bulletsを描画)
+            CTX.fillStyle = '#ffeb3b';
+            this.localBullets.forEach(b => {
                 CTX.beginPath();
                 CTX.arc(b.x, b.y, BULLET_RADIUS, 0, Math.PI*2);
                 CTX.fill();
             });
 
-            // Players
-            ['p1', 'p2'].forEach(pid => {
-                const p = this.localState.players[pid];
-                if (!p.active) return;
-
-                // 本体
-                CTX.beginPath();
-                CTX.arc(p.x, p.y, PLAYER_RADIUS, 0, Math.PI*2);
-                CTX.fillStyle = pid === this.myId ? '#00ccff' : '#ff4444';
-                CTX.fill();
-                CTX.lineWidth = 3;
-                CTX.strokeStyle = '#fff';
-                CTX.stroke();
-
-                // 名前
-                CTX.fillStyle = '#fff';
-                CTX.font = '12px Arial';
-                CTX.textAlign = 'center';
-                CTX.fillText(pid.toUpperCase(), p.x, p.y - 30);
-            });
-
-            // Stick UI
+            // Stick (UI)
             CTX.beginPath();
             CTX.arc(this.stickBase.x, this.stickBase.y, 50, 0, Math.PI*2);
             CTX.strokeStyle = 'rgba(255,255,255,0.3)';
             CTX.lineWidth = 2;
             CTX.stroke();
+            
             CTX.beginPath();
             CTX.arc(this.stickBase.x + this.input.x*50, this.stickBase.y + this.input.y*50, 25, 0, Math.PI*2);
             CTX.fillStyle = 'rgba(255,255,255,0.5)';
             CTX.fill();
-
-            // Fire Button
-            const fireX = CANVAS.width - 90;
-            const fireY = CANVAS.height - 100;
+            
+            // Fire Button (Right side)
+            const fireX = CANVAS.width - 100;
+            const fireY = CANVAS.height - 120;
             CTX.beginPath();
             CTX.arc(fireX, fireY, 40, 0, Math.PI*2);
-            CTX.fillStyle = this.input.fire ? 'rgba(255,50,50,0.8)' : 'rgba(255,50,50,0.4)';
+            CTX.fillStyle = this.input.fire ? 'rgba(255,0,0,0.6)' : 'rgba(255,0,0,0.3)';
             CTX.fill();
-            CTX.strokeStyle = '#fff';
+            CTX.strokeStyle = 'white';
             CTX.stroke();
-            CTX.fillStyle = '#fff';
-            CTX.font = 'bold 14px Arial';
+            CTX.fillStyle = 'white';
+            CTX.font = '14px Arial';
+            CTX.textAlign = 'center';
             CTX.fillText("FIRE", fireX, fireY + 5);
         }
 
@@ -541,33 +511,36 @@
             document.getElementById('btn-join').onclick = () => {
                 const id = document.getElementById('input-room').value;
                 if(id.length === 4) this.joinRoom(id);
-                else alert("Please enter 4 digits");
+                else alert("Enter 4 digits");
             };
         }
 
         setupInputs() {
             const handleTouch = (e) => {
                 e.preventDefault();
-                for (let i = 0; i < e.changedTouches.length; i++) {
-                    const t = e.changedTouches[i];
+                const touches = e.changedTouches;
+                for (let i = 0; i < touches.length; i++) {
+                    const t = touches[i];
+                    
                     if (t.clientX < CANVAS.width / 2) {
                         this.touchId = t.identifier;
                         const dx = t.clientX - this.stickBase.x;
                         const dy = t.clientY - this.stickBase.y;
                         const dist = Math.hypot(dx, dy);
                         const max = 50;
+                        
                         if (dist > max) {
-                            this.input.x = dx / dist;
-                            this.input.y = dy / dist;
+                            this.input.x = (dx / dist);
+                            this.input.y = (dy / dist);
                         } else {
                             this.input.x = dx / max;
                             this.input.y = dy / max;
                         }
                     } else {
-                        // Right side fire
-                        const fireX = CANVAS.width - 90;
-                        const fireY = CANVAS.height - 100;
-                        if (Math.hypot(t.clientX - fireX, t.clientY - fireY) < 60) {
+                        const fireX = CANVAS.width - 100;
+                        const fireY = CANVAS.height - 120;
+                        const dist = Math.hypot(t.clientX - fireX, t.clientY - fireY);
+                        if (dist < 60) {
                             this.input.fire = true;
                         }
                     }
@@ -576,8 +549,9 @@
 
             const handleEnd = (e) => {
                 e.preventDefault();
-                for (let i = 0; i < e.changedTouches.length; i++) {
-                    const t = e.changedTouches[i];
+                const touches = e.changedTouches;
+                for (let i = 0; i < touches.length; i++) {
+                    const t = touches[i];
                     if (t.identifier === this.touchId) {
                         this.input.x = 0;
                         this.input.y = 0;
