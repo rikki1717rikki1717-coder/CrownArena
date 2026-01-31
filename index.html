@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Firestore Shooter Final</title>
+    <title>Firestore Shooter Final Fixed</title>
     <style>
         body {
             margin: 0;
@@ -241,6 +241,7 @@
             // Timers
             this.lastSyncTime = 0;
             this.unsubscribe = null; // Snapshot解除用
+            this.isRoomReady = false; // 部屋作成完了フラグ
 
             this.resize();
             window.addEventListener('resize', () => this.resize());
@@ -287,10 +288,14 @@
             };
 
             try {
+                // ドキュメントを作成してから監視を開始する
                 await setDoc(doc(db, "rooms", this.roomId), initialData);
+                
+                this.isRoomReady = true; // 作成完了フラグ
                 this.switchLayer('wait');
                 document.getElementById('room-display').innerText = this.roomId;
                 document.getElementById('hud-room').innerText = this.roomId;
+                
                 this.subscribeToRoom();
             } catch (e) {
                 alert("Error: " + e.message);
@@ -318,6 +323,7 @@
                 });
 
                 document.getElementById('hud-room').innerText = this.roomId;
+                this.isRoomReady = true;
                 this.subscribeToRoom();
 
             } catch (e) {
@@ -329,24 +335,27 @@
             if (this.unsubscribe) this.unsubscribe();
             
             this.unsubscribe = onSnapshot(doc(db, "rooms", this.roomId), (docSnap) => {
+                // 1. 部屋削除チェック (自分が作成中/参加中なのにドキュメントが消えた場合)
                 if (!docSnap.exists()) {
-                    // 部屋が削除された場合
-                    alert("Room was disbanded.");
-                    location.reload();
+                    if (this.isRoomReady) {
+                        alert("Room was disbanded.");
+                        location.reload();
+                    }
                     return;
                 }
+
                 const data = docSnap.data();
                 
-                // 1. ステータス管理
+                // 2. ステータス管理
                 if (data.status === "playing") {
                     this.switchLayer(null); // ゲーム画面へ
                     this.state.status = "playing";
                 } else if (data.status === "finished") {
-                    this.showResult(data.winner);
                     this.state.status = "finished";
+                    this.showResult(data.winner);
                 }
 
-                // 2. データ同期
+                // 3. データ同期
                 if (this.isHost) {
                     // Host: P2の入力のみ受け取る
                     if (data.players.p2) {
@@ -464,14 +473,15 @@
                     const dy = b.y - target.y;
                     
                     if (Math.hypot(dx, dy) < PLAYER_RADIUS + BULLET_RADIUS) {
-                        hit = true;
+                        hit = true; // 見た目上消す
                         
-                        // ★重要: HPを減らすのはHostのみ
+                        // ★重要: HPを減らす/死亡判定はHostのみが行う
                         if (this.isHost) {
                             target.hp -= 10;
                             if (target.hp <= 0) {
                                 target.hp = 0;
-                                this.endGame(b.owner); // 勝者を渡す
+                                // 相手を倒したので、自分が勝者
+                                this.endGame(b.owner); 
                             }
                         }
                     }
@@ -482,6 +492,9 @@
 
         async endGame(winnerId) {
             if (!this.isHost) return;
+            // 既に終了していたら何もしない
+            if (this.state.status === "finished") return;
+
             this.state.status = "finished";
             
             // Firestoreに結果送信
