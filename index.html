@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Firestore Shooter with ULT & Timer</title>
+    <title>Crown Arena</title>
     <style>
         body {
             margin: 0;
@@ -47,7 +47,7 @@
             box-shadow: 0 10px 25px rgba(0,0,0,0.5);
         }
 
-        h1 { margin: 0 0 20px 0; color: #00e5ff; font-size: 24px; }
+        h1 { margin: 0 0 20px 0; color: #ffd700; font-size: 28px; text-shadow: 0 0 10px #ff8c00; }
         h2 { margin: 0 0 15px 0; font-size: 36px; font-weight: bold; }
 
         input {
@@ -121,15 +121,15 @@
         .hp-bar-bg {
             width: 120px;
             height: 10px;
-            background: #555;
-            border: 1px solid #fff;
+            background: #333;
+            border: 1px solid #777;
             margin-top: 5px;
         }
         .hp-fill {
             height: 100%;
             background: #0f0;
             width: 100%;
-            transition: width 0.2s;
+            transition: width 0.2s, background-color 0.2s;
         }
 
         /* --- ULT UI --- */
@@ -158,18 +158,19 @@
             width: 60px;
             height: 60px;
             border-radius: 50%;
-            background: #555;
-            color: #aaa;
+            background: #444;
+            color: #888;
             font-weight: bold;
             font-size: 14px;
-            border: 2px solid #777;
+            border: 2px solid #666;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: default;
+            transition: all 0.2s;
         }
         #btn-ult.ready {
-            background: #d000ff;
+            background: #9c27b0;
             color: white;
             border-color: #fff;
             box-shadow: 0 0 15px #d000ff;
@@ -198,7 +199,7 @@
 
     <div id="layer-menu" class="layer">
         <div class="panel">
-            <h1>Firestore Shooter ULT</h1>
+            <h1>Crown Arena</h1>
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
             <div style="margin: 10px 0; color:#666;">- OR -</div>
             <input type="number" id="input-room" placeholder="4-Digit Room ID">
@@ -258,7 +259,7 @@
 
 <script type="module">
     // ---------------------------------------------------------
-    // 1. Firebase Config
+    // 1. Firebase Config & Imports
     // ---------------------------------------------------------
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { 
@@ -287,16 +288,16 @@
     // Game Config
     const PLAYER_RADIUS = 20;
     const BULLET_RADIUS = 6;
-    const ULT_RADIUS = 15; // ウルト弾のサイズ
+    const ULT_RADIUS = 20;
     const MOVE_SPEED = 5;
     const BULLET_SPEED = 12;
     const FIRE_RATE = 200; 
     const SYNC_INTERVAL = 50; 
     
-    const GAME_DURATION = 60; // 60秒
+    const GAME_DURATION = 60; 
     const ULT_MAX = 100;
-    const ULT_CHARGE_PASSIVE = 5; // 毎秒5増加
-    const ULT_CHARGE_DAMAGE = 10; // 被弾時10増加
+    const ULT_CHARGE_PASSIVE = 5; // 毎秒
+    const ULT_CHARGE_HIT = 10;    // 被弾時
 
     // ---------------------------------------------------------
     // 3. Game Logic Class
@@ -316,10 +317,10 @@
                 status: "waiting", // waiting, playing, finished
                 remainingTime: GAME_DURATION,
                 bulletSeq: 0,
-                ultSeq: 0 // ウルト発射イベント用
+                ultSeq: 0
             };
 
-            this.localBullets = []; // 通常弾+ウルト弾混合 { ..., isUlt: bool }
+            this.localBullets = []; // Client Prediction用
 
             // Input
             this.input = { x: 0, y: 0, fire: false };
@@ -329,6 +330,7 @@
             // Timers
             this.lastSyncTime = 0;
             this.lastTimeTick = 0;
+            this.lastFrameTime = Date.now();
             this.unsubscribe = null;
             this.isRoomReady = false;
 
@@ -363,7 +365,7 @@
             this.isHost = true;
             this.myId = 'p1';
             
-            // 初期状態
+            // 初期化
             this.state.players.p1.active = true;
             this.state.players.p1.x = 100;
             this.state.players.p1.hp = 100;
@@ -451,14 +453,13 @@
                     this.state.remainingTime = data.remainingTime;
                 }
 
-                // 3. 弾丸イベント (通常弾)
+                // 3. 弾丸イベント
                 if (data.bulletSeq > this.state.bulletSeq) {
                     if (data.lastShooter !== this.myId) {
                         this.spawnBulletFromSync(data.lastShooter, false);
                     }
                     this.state.bulletSeq = data.bulletSeq;
                 }
-                // 4. ウルトイベント
                 if (data.ultSeq > this.state.ultSeq) {
                     if (data.lastShooter !== this.myId) {
                         this.spawnBulletFromSync(data.lastShooter, true);
@@ -466,31 +467,32 @@
                     this.state.ultSeq = data.ultSeq;
                 }
 
-                // 5. プレイヤー情報同期
+                // 4. プレイヤー情報同期
+                // HostはP2の操作のみ受信、GuestはP1全情報と自分のステータス(HP/ULT)を受信
                 if (this.isHost) {
-                    // Host: P2の入力系のみ受信
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
                         p2.x = data.players.p2.x;
                         p2.y = data.players.p2.y;
                         p2.isShooting = data.players.p2.isShooting;
                         p2.active = data.players.p2.active;
-                        // ult, slowUntil はHostが計算して送る側だが、もしP2側で操作があれば...今回はHost計算
                     }
                 } else {
-                    // Guest: P1全情報 + 自分のStatus(HP, Ult, Slow)を受信
+                    // Guest: P1を完全同期
                     if (data.players.p1) {
                         Object.assign(this.state.players.p1, data.players.p1);
                     }
+                    // Guest: 自分のステータス(HP, ULT, Slow)はHost計算値を信頼
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
                         p2.hp = data.players.p2.hp;
-                        p2.active = data.players.p2.active;
                         p2.ult = data.players.p2.ult;
                         p2.slowUntil = data.players.p2.slowUntil;
+                        p2.active = data.players.p2.active;
                     }
                 }
                 
+                // UI更新はここで一括
                 this.updateUI();
             });
         }
@@ -502,9 +504,10 @@
 
             try {
                 if (this.isHost) {
-                    // Host: タイマー, 全HP, 全ULT, 全Slow, P1座標
+                    // Host: 権限を持つすべてのデータ(全HP, 全ULT, 時間, P1座標)を送信
                     await updateDoc(ref, {
                         "remainingTime": Math.ceil(this.state.remainingTime),
+                        
                         "players.p1.x": me.x,
                         "players.p1.y": me.y,
                         "players.p1.isShooting": me.isShooting,
@@ -517,7 +520,7 @@
                         "players.p2.slowUntil": this.state.players.p2.slowUntil
                     });
                 } else {
-                    // Guest: P2座標, 射撃フラグ
+                    // Guest: 自分の操作入力(座標, 発射フラグ)のみ送信
                     await updateDoc(ref, {
                         "players.p2.x": me.x,
                         "players.p2.y": me.y,
@@ -527,46 +530,38 @@
             } catch (e) { /* ignore lag */ }
         }
 
-        // --- Bullet Logic ---
+        // --- Logic ---
 
-        // 発射トリガー (通常)
-        async triggerFire() {
+        triggerFire() {
             const now = Date.now();
             const me = this.state.players[this.myId];
             if (now - (me.lastFire || 0) < FIRE_RATE) return;
             me.lastFire = now;
 
-            // ローカル生成
             this.spawnBulletLocal(this.myId, false);
-
-            // Firestore通知
-            try {
-                await updateDoc(doc(db, "rooms", this.roomId), {
-                    bulletSeq: increment(1),
-                    lastShooter: this.myId
-                });
-            } catch (e) {}
+            this.sendFireEvent(false);
         }
 
-        // 発射トリガー (ULT)
-        async triggerUlt() {
+        triggerUlt() {
             const me = this.state.players[this.myId];
-            if (me.ult < ULT_MAX) return; // ゲージ不足
+            if (me.ult < ULT_MAX) return;
 
-            // 消費
+            // Hostなら即減らす、Guestならサーバー同期を待つが、見た目上即0にしておく
             me.ult = 0;
 
-            // ローカル生成
             this.spawnBulletLocal(this.myId, true);
+            this.sendFireEvent(true);
+        }
 
-            // Firestore通知
+        async sendFireEvent(isUlt) {
+            const ref = doc(db, "rooms", this.roomId);
             try {
-                await updateDoc(doc(db, "rooms", this.roomId), {
-                    ultSeq: increment(1),
-                    lastShooter: this.myId,
-                    [`players.${this.myId}.ult`]: 0 // 即座に反映
-                });
-            } catch (e) {}
+                if (isUlt) {
+                    await updateDoc(ref, { ultSeq: increment(1), lastShooter: this.myId });
+                } else {
+                    await updateDoc(ref, { bulletSeq: increment(1), lastShooter: this.myId });
+                }
+            } catch(e) {}
         }
 
         spawnBulletFromSync(shooterId, isUlt) {
@@ -579,25 +574,23 @@
 
             let vx = (ownerId === 'p1') ? BULLET_SPEED : -BULLET_SPEED;
             this.localBullets.push({
-                x: p.x, 
-                y: p.y, 
-                vx: vx, 
-                vy: 0, 
-                owner: ownerId,
-                isUlt: isUlt,
+                x: p.x, y: p.y, vx: vx, vy: 0, 
+                owner: ownerId, isUlt: isUlt, 
                 r: isUlt ? ULT_RADIUS : BULLET_RADIUS
             });
         }
 
-        // --- Game Loop ---
+        // --- Loop ---
 
-        update() {
+        update(dt) {
             const now = Date.now();
-            const dt = 1/60; // 簡易
+            const deltaTimeSec = (now - this.lastFrameTime) / 1000;
+            this.lastFrameTime = now;
 
             if (this.state.status === "playing") {
-                // 1. タイマー (Host)
+                // 1. Host Logic: Timer & Passive ULT
                 if (this.isHost) {
+                    // Timer
                     if (now - this.lastTimeTick > 1000) {
                         this.state.remainingTime -= 1;
                         this.lastTimeTick = now;
@@ -605,42 +598,32 @@
                             this.checkTimeOver();
                         }
                     }
-                }
-
-                // 2. ULTチャージ (Passive)
-                // Hostが管理して同期するが、見た目の滑らかさのためにローカルでも加算OK
-                // ここではHostが一括管理してSyncで送る形にする (整合性重視)
-                if (this.isHost) {
+                    // Passive ULT Charge
                     ['p1', 'p2'].forEach(pid => {
                         const p = this.state.players[pid];
                         if (p.active && p.ult < ULT_MAX) {
-                            p.ult += ULT_CHARGE_PASSIVE * dt;
+                            p.ult += ULT_CHARGE_PASSIVE * deltaTimeSec;
                             if (p.ult > ULT_MAX) p.ult = ULT_MAX;
                         }
                     });
                 }
 
-                // 3. 自分の移動 (スロー判定込み)
+                // 2. Movement
                 const me = this.state.players[this.myId];
                 if (me) {
-                    // スロー判定
-                    let currentSpeed = MOVE_SPEED;
-                    if (now < me.slowUntil) {
-                        currentSpeed *= 0.5;
-                    }
+                    let speed = MOVE_SPEED;
+                    if (now < me.slowUntil) speed *= 0.5;
 
-                    me.x += this.input.x * currentSpeed;
-                    me.y += this.input.y * currentSpeed;
+                    me.x += this.input.x * speed;
+                    me.y += this.input.y * speed;
                     me.x = Math.max(20, Math.min(CANVAS.width - 20, me.x));
                     me.y = Math.max(20, Math.min(CANVAS.height - 20, me.y));
 
-                    if (this.input.fire) {
-                        this.triggerFire();
-                    }
+                    if (this.input.fire) this.triggerFire();
                 }
             }
 
-            this.updateBullets();
+            this.updateBullets(now);
 
             if (now - this.lastSyncTime > SYNC_INTERVAL) {
                 this.syncToFirestore();
@@ -648,21 +631,19 @@
             }
         }
 
-        updateBullets() {
-            const now = Date.now();
-
+        updateBullets(now) {
             // 移動
             this.localBullets.forEach(b => {
                 b.x += b.vx;
                 b.y += b.vy;
             });
 
-            // 画面外削除
+            // 削除
             this.localBullets = this.localBullets.filter(b => 
                 b.x > 0 && b.x < CANVAS.width && b.y > 0 && b.y < CANVAS.height
             );
 
-            // 当たり判定
+            // 当たり判定 (貫通防止のためGuestも判定して消す)
             this.localBullets = this.localBullets.filter(b => {
                 let hit = false;
                 const targetId = b.owner === 'p1' ? 'p2' : 'p1';
@@ -673,22 +654,18 @@
                     const dy = b.y - target.y;
                     
                     if (Math.hypot(dx, dy) < PLAYER_RADIUS + b.r) {
-                        hit = true;
+                        hit = true; 
                         
-                        // Hostのみがダメージ計算
+                        // ★重要: HP計算権限はHostのみ
                         if (this.isHost) {
                             const dmg = b.isUlt ? 20 : 10;
                             target.hp -= dmg;
                             
-                            // ULTチャージ (被弾ボーナス)
-                            target.ult = Math.min(ULT_MAX, target.ult + ULT_CHARGE_DAMAGE);
+                            // ULTチャージ (被弾)
+                            target.ult = Math.min(ULT_MAX, target.ult + ULT_CHARGE_HIT);
 
-                            // スロー付与
-                            if (b.isUlt) {
-                                target.slowUntil = now + 3000; 
-                            }
+                            if (b.isUlt) target.slowUntil = now + 3000;
 
-                            // 死亡判定
                             if (target.hp <= 0) {
                                 target.hp = 0;
                                 this.endGame(b.owner);
@@ -696,25 +673,22 @@
                         }
                     }
                 }
-                return !hit; 
+                return !hit; // Hitしたら配列から消える
             });
         }
 
         checkTimeOver() {
-            // HPが多い方の勝ち
-            const p1hp = this.state.players.p1.hp;
-            const p2hp = this.state.players.p2.hp;
+            const p1 = this.state.players.p1.hp;
+            const p2 = this.state.players.p2.hp;
             let winner = null;
-            if (p1hp > p2hp) winner = 'p1';
-            else if (p2hp > p1hp) winner = 'p2';
-            else winner = 'draw'; // 引き分け
-            
+            if (p1 > p2) winner = 'p1';
+            else if (p2 > p1) winner = 'p2';
+            else winner = 'draw';
             this.endGame(winner);
         }
 
         async endGame(winnerId) {
             if (!this.isHost || this.state.status === "finished") return;
-
             this.state.status = "finished";
             
             await updateDoc(doc(db, "rooms", this.roomId), {
@@ -726,13 +700,41 @@
             });
         }
 
-        // --- UI & Rendering ---
+        // --- UI ---
 
         switchLayer(name) {
             for (let key in this.layers) {
                 if (key === name) this.layers[key].classList.remove('hidden');
                 else this.layers[key].classList.add('hidden');
             }
+        }
+
+        updateUI() {
+            // Timer
+            document.getElementById('timer-container').innerText = Math.max(0, Math.floor(this.state.remainingTime));
+
+            // HP
+            const p1 = this.state.players.p1;
+            const p2 = this.state.players.p2;
+            document.getElementById('text-hp-p1').innerText = Math.floor(p1.hp);
+            document.getElementById('bar-hp-p1').style.width = p1.hp + "%";
+            
+            document.getElementById('text-hp-p2').innerText = Math.floor(p2.hp);
+            document.getElementById('bar-hp-p2').style.width = p2.hp + "%";
+
+            // HP Bar Color (Pinch)
+            const p1bar = document.getElementById('bar-hp-p1');
+            p1bar.style.backgroundColor = p1.hp > 30 ? '#0f0' : '#f00';
+            const p2bar = document.getElementById('bar-hp-p2');
+            p2bar.style.backgroundColor = p2.hp > 30 ? '#0f0' : '#f00';
+
+            // ULT (自分の分だけ)
+            const myUlt = this.state.players[this.myId]?.ult || 0;
+            document.getElementById('bar-ult').style.width = myUlt + "%";
+            
+            const btnUlt = document.getElementById('btn-ult');
+            if (myUlt >= ULT_MAX) btnUlt.classList.add('ready');
+            else btnUlt.classList.remove('ready');
         }
 
         showResult(winnerId) {
@@ -769,6 +771,7 @@
         async restartGame() {
             if (!this.isHost) return;
             
+            // リセット
             this.state.players.p1.hp = 100;
             this.state.players.p1.x = 100;
             this.state.players.p1.ult = 0;
@@ -800,29 +803,6 @@
             } catch (e) { console.error(e); }
         }
 
-        updateUI() {
-            // Timer
-            document.getElementById('timer-container').innerText = Math.max(0, Math.ceil(this.state.remainingTime));
-
-            // HP Bars
-            document.getElementById('text-hp-p1').innerText = Math.floor(this.state.players.p1.hp);
-            document.getElementById('bar-hp-p1').style.width = this.state.players.p1.hp + "%";
-            
-            document.getElementById('text-hp-p2').innerText = Math.floor(this.state.players.p2.hp);
-            document.getElementById('bar-hp-p2').style.width = this.state.players.p2.hp + "%";
-
-            // ULT Gauge (自分のみ)
-            const myUlt = this.state.players[this.myId]?.ult || 0;
-            document.getElementById('bar-ult').style.width = myUlt + "%";
-            
-            const btnUlt = document.getElementById('btn-ult');
-            if (myUlt >= ULT_MAX) {
-                btnUlt.classList.add('ready');
-            } else {
-                btnUlt.classList.remove('ready');
-            }
-        }
-
         draw() {
             CTX.fillStyle = '#222';
             CTX.fillRect(0, 0, CANVAS.width, CANVAS.height);
@@ -837,7 +817,7 @@
                 CTX.fillStyle = pid === 'p1' ? '#00ccff' : '#00ff00';
                 CTX.fill();
                 
-                // Slow Indicator (Blue Ring)
+                // Slow Effect
                 if (Date.now() < p.slowUntil) {
                     CTX.strokeStyle = '#00ffff';
                     CTX.lineWidth = 3;
@@ -910,7 +890,7 @@
             document.getElementById('btn-close').onclick = () => this.disbandRoom();
             document.getElementById('btn-leave').onclick = () => location.reload();
             document.getElementById('btn-ult').onclick = (e) => {
-                e.stopPropagation(); // スティック等の干渉防止
+                e.stopPropagation();
                 this.triggerUlt();
             };
         }
@@ -922,7 +902,6 @@
                 for (let i = 0; i < touches.length; i++) {
                     const t = touches[i];
                     
-                    // Left Stick
                     if (t.clientX < CANVAS.width / 2) {
                         this.touchId = t.identifier;
                         const dx = t.clientX - this.stickBase.x;
@@ -932,13 +911,8 @@
                         if (dist > max) { this.input.x = (dx / dist); this.input.y = (dy / dist); }
                         else { this.input.x = dx / max; this.input.y = dy / max; }
                     } else {
-                        // Fire Button
-                        const fireX = CANVAS.width - 100;
-                        const fireY = CANVAS.height - 120;
-                        const distFire = Math.hypot(t.clientX - fireX, t.clientY - fireY);
-                        if (distFire < 60) {
-                            this.input.fire = true;
-                        }
+                        const dist = Math.hypot(t.clientX - (CANVAS.width - 100), t.clientY - (CANVAS.height - 120));
+                        if (dist < 60) this.input.fire = true;
                     }
                 }
             };
