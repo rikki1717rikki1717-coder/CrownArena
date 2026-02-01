@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crown Arena v1.0</title>
+    <title>Crown Arena v1.1</title>
     <style>
         body {
             margin: 0;
@@ -34,6 +34,7 @@
             background: rgba(0, 0, 0, 0.9);
             z-index: 20;
             transition: opacity 0.3s;
+            pointer-events: auto;
         }
 
         .panel {
@@ -199,7 +200,7 @@
 
     <div id="layer-menu" class="layer">
         <div class="panel">
-            <h1>Crown Arena v1.0</h1>
+            <h1>Crown Arena v1.1</h1>
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
             <div style="margin: 10px 0; color:#666;">- OR -</div>
             <input type="number" id="input-room" placeholder="4-Digit Room ID">
@@ -291,7 +292,7 @@
     const ULT_RADIUS = 20;
     const MOVE_SPEED = 5;
     const BULLET_SPEED = 12;
-    const FIRE_RATE = 200; 
+    const FIRE_RATE = 250; 
     const SYNC_INTERVAL = 50; 
     
     const GAME_DURATION = 60; 
@@ -311,26 +312,31 @@
             // ゲーム状態
             this.state = {
                 players: {
-                    p1: { x: 100, y: 100, hp: 100, isShooting: false, active: false, ult: 0, slowUntil: 0 },
-                    p2: { x: 300, y: 100, hp: 100, isShooting: false, active: false, ult: 0, slowUntil: 0 }
+                    p1: { x: 100, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0 },
+                    p2: { x: 300, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0 }
                 },
-                status: "waiting", // waiting, playing, finished, closed
+                status: "waiting", // waiting, playing, finished
                 remainingTime: GAME_DURATION,
-                startTime: null, // ゲーム開始時刻(timestamp)
+                startTime: null,
                 bulletSeq: 0,
                 ultSeq: 0
             };
 
-            this.localBullets = []; // Client Prediction用
+            this.localBullets = []; 
+            this.particles = []; // 発射エフェクト用
 
             // Input
-            this.input = { x: 0, y: 0, fire: false };
-            this.touchId = null;
-            this.stickBase = { x: 100, y: 300 };
+            this.input = {
+                move: { active: false, x: 0, y: 0, id: null, baseX: 0, baseY: 0 },
+                aim:  { active: false, x: 0, y: 0, id: null, baseX: 0, baseY: 0, angle: 0 },
+                fireTrigger: false // フレームごとの発射フラグ
+            };
             
             // Timers
             this.lastSyncTime = 0;
+            this.lastTimeTick = 0;
             this.lastFrameTime = Date.now();
+            this.lastFireTime = 0;
             this.unsubscribe = null;
             this.isRoomReady = false;
 
@@ -355,7 +361,7 @@
         resize() {
             CANVAS.width = window.innerWidth;
             CANVAS.height = window.innerHeight;
-            this.stickBase = { x: 120, y: CANVAS.height - 120 };
+            // 固定スティック位置は使わず、タッチ位置基準のダイナミック方式にするためリサイズ処理は最小限
         }
 
         // --- Network Actions ---
@@ -375,14 +381,15 @@
             const initialData = {
                 players: {
                     p1: this.state.players.p1,
-                    p2: { x: 300, y: 100, hp: 100, isShooting: false, active: false, ult: 0, slowUntil: 0 }
+                    p2: { x: 300, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0 }
                 },
                 status: "waiting",
                 startTime: null,
                 winner: null,
                 bulletSeq: 0,
                 ultSeq: 0,
-                lastShooter: null
+                lastShooter: null,
+                lastAngle: 0 // 追加: 弾の角度
             };
 
             try {
@@ -440,29 +447,24 @@
             if (this.unsubscribe) this.unsubscribe();
             
             this.unsubscribe = onSnapshot(doc(db, "rooms", this.roomId), (docSnap) => {
-                // 1. ドキュメントが存在しない場合のハンドリング
                 if (!docSnap.exists()) {
-                    // すでに準備完了後にドキュメントが消えた場合はエラー扱いだが
-                    // 一瞬消える現象対策のため、即リロードせずログだけ出す
                     console.warn("Snapshot: Document does not exist (ignoring temporary glitch)");
                     return;
                 }
                 const data = docSnap.data();
                 
-                // 2. 部屋がクローズされた場合
                 if (data.status === "closed") {
                     alert("Room was closed by host.");
                     location.reload();
                     return;
                 }
 
-                // 3. ゲーム開始処理 (Host Only)
-                // P2が入ってきた(activeになった)ら、Hostが開始時間を設定してPlayingにする
+                // ゲーム開始処理 (Host Only)
                 if (this.isHost && this.state.status === "waiting" && data.players.p2 && data.players.p2.active) {
                     this.startGameAsHost();
                 }
 
-                // 4. ステータス同期
+                // ステータス同期
                 if (data.status === "playing") {
                     this.switchLayer(null); 
                     this.state.status = "playing";
@@ -473,36 +475,34 @@
                     this.showResult(data.winner);
                 }
 
-                // 5. タイマー基準時間同期
+                // タイマー同期
                 if (data.startTime) {
                     this.state.startTime = data.startTime;
                 }
 
-                // 6. 弾丸イベント
+                // 弾丸イベント (角度情報付き)
                 if (data.bulletSeq > this.state.bulletSeq) {
                     if (data.lastShooter !== this.myId) {
-                        this.spawnBulletFromSync(data.lastShooter, false);
+                        this.spawnBulletFromSync(data.lastShooter, false, data.lastAngle);
                     }
                     this.state.bulletSeq = data.bulletSeq;
                 }
                 if (data.ultSeq > this.state.ultSeq) {
                     if (data.lastShooter !== this.myId) {
-                        this.spawnBulletFromSync(data.lastShooter, true);
+                        this.spawnBulletFromSync(data.lastShooter, true, data.lastAngle);
                     }
                     this.state.ultSeq = data.ultSeq;
                 }
 
-                // 7. プレイヤー情報同期
+                // プレイヤー情報同期
                 if (this.isHost) {
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
                         p2.x = data.players.p2.x;
                         p2.y = data.players.p2.y;
-                        p2.isShooting = data.players.p2.isShooting;
                         p2.active = data.players.p2.active;
                     }
                 } else {
-                    // Guest: P1全情報 + 自分のステータス(Host計算)を受信
                     if (data.players.p1) {
                         Object.assign(this.state.players.p1, data.players.p1);
                     }
@@ -520,7 +520,6 @@
         }
 
         async startGameAsHost() {
-            // Hostが開始時刻を決定して書き込む
             const now = Date.now();
             this.state.startTime = now;
             this.state.status = "playing";
@@ -542,11 +541,10 @@
 
             try {
                 if (this.isHost) {
-                    // Host: 権限を持つすべてのデータを送信
                     await updateDoc(ref, {
+                        "remainingTime": Math.ceil(this.state.remainingTime),
                         "players.p1.x": me.x,
                         "players.p1.y": me.y,
-                        "players.p1.isShooting": me.isShooting,
                         "players.p1.hp": this.state.players.p1.hp,
                         "players.p1.ult": Math.floor(this.state.players.p1.ult),
                         "players.p1.slowUntil": this.state.players.p1.slowUntil,
@@ -556,26 +554,28 @@
                         "players.p2.slowUntil": this.state.players.p2.slowUntil
                     });
                 } else {
-                    // Guest: 操作のみ送信
                     await updateDoc(ref, {
                         "players.p2.x": me.x,
-                        "players.p2.y": me.y,
-                        "players.p2.isShooting": me.isShooting
+                        "players.p2.y": me.y
                     });
                 }
             } catch (e) { /* ignore lag */ }
         }
 
-        // --- Logic ---
+        // --- Bullet Logic ---
 
-        triggerFire() {
+        // 攻撃スティックリリース時に呼ばれる
+        triggerFire(angle) {
             const now = Date.now();
-            const me = this.state.players[this.myId];
-            if (now - (me.lastFire || 0) < FIRE_RATE) return;
-            me.lastFire = now;
+            // クールダウン
+            if (now - this.lastFireTime < FIRE_RATE) return;
+            this.lastFireTime = now;
 
-            this.spawnBulletLocal(this.myId, false);
-            this.sendFireEvent(false);
+            // ローカル生成
+            this.spawnBulletLocal(this.myId, false, angle);
+            
+            // Firestore送信
+            this.sendFireEvent(false, angle);
         }
 
         triggerUlt() {
@@ -583,34 +583,56 @@
             if (me.ult < ULT_MAX) return;
 
             me.ult = 0;
-            this.spawnBulletLocal(this.myId, true);
-            this.sendFireEvent(true);
+            // エイム中の角度があればそれを使う、なければデフォルト(P1右/P2左)
+            let angle = this.input.aim.active ? this.input.aim.angle : (this.myId === 'p1' ? 0 : Math.PI);
+            
+            this.spawnBulletLocal(this.myId, true, angle);
+            this.sendFireEvent(true, angle);
         }
 
-        async sendFireEvent(isUlt) {
+        async sendFireEvent(isUlt, angle) {
             const ref = doc(db, "rooms", this.roomId);
             try {
                 if (isUlt) {
-                    await updateDoc(ref, { ultSeq: increment(1), lastShooter: this.myId });
+                    await updateDoc(ref, { 
+                        ultSeq: increment(1), 
+                        lastShooter: this.myId,
+                        lastAngle: angle
+                    });
                 } else {
-                    await updateDoc(ref, { bulletSeq: increment(1), lastShooter: this.myId });
+                    await updateDoc(ref, { 
+                        bulletSeq: increment(1), 
+                        lastShooter: this.myId,
+                        lastAngle: angle
+                    });
                 }
             } catch(e) {}
         }
 
-        spawnBulletFromSync(shooterId, isUlt) {
-            this.spawnBulletLocal(shooterId, isUlt);
+        spawnBulletFromSync(shooterId, isUlt, angle) {
+            this.spawnBulletLocal(shooterId, isUlt, angle);
         }
 
-        spawnBulletLocal(ownerId, isUlt) {
+        spawnBulletLocal(ownerId, isUlt, angle) {
             const p = this.state.players[ownerId];
             if (!p || !p.active) return;
 
-            let vx = (ownerId === 'p1') ? BULLET_SPEED : -BULLET_SPEED;
             this.localBullets.push({
-                x: p.x, y: p.y, vx: vx, vy: 0, 
-                owner: ownerId, isUlt: isUlt, 
+                x: p.x, 
+                y: p.y, 
+                vx: Math.cos(angle) * BULLET_SPEED, 
+                vy: Math.sin(angle) * BULLET_SPEED, 
+                owner: ownerId, 
+                isUlt: isUlt, 
                 r: isUlt ? ULT_RADIUS : BULLET_RADIUS
+            });
+
+            // 発射エフェクト
+            this.particles.push({
+                x: p.x + Math.cos(angle) * 30,
+                y: p.y + Math.sin(angle) * 30,
+                life: 10,
+                color: isUlt ? '#d000ff' : '#ffff00'
             });
         }
 
@@ -621,19 +643,18 @@
             const deltaTimeSec = (now - this.lastFrameTime) / 1000;
             this.lastFrameTime = now;
 
-            // タイマー計算 (Host/Guest共通: startTime基準)
+            // Timer
             if (this.state.status === "playing" && this.state.startTime) {
                 const elapsed = (now - this.state.startTime) / 1000;
                 this.state.remainingTime = Math.max(0, GAME_DURATION - elapsed);
                 
-                // 時間切れ判定 (Hostのみ)
                 if (this.isHost && this.state.remainingTime <= 0) {
                     this.checkTimeOver();
                 }
             }
 
             if (this.state.status === "playing") {
-                // 1. Host Logic (Passive ULT)
+                // Host Logic
                 if (this.isHost) {
                     ['p1', 'p2'].forEach(pid => {
                         const p = this.state.players[pid];
@@ -644,22 +665,28 @@
                     });
                 }
 
-                // 2. Movement
+                // Movement
                 const me = this.state.players[this.myId];
                 if (me) {
                     let speed = MOVE_SPEED;
                     if (now < me.slowUntil) speed *= 0.5;
 
-                    me.x += this.input.x * speed;
-                    me.y += this.input.y * speed;
+                    // 移動スティックの入力反映
+                    if (this.input.move.active) {
+                        const mx = Math.cos(this.input.move.angle);
+                        const my = Math.sin(this.input.move.angle);
+                        // スティックの倒し具合(dist)も考慮できるが今回は正規化方向へ等速移動
+                        me.x += mx * speed;
+                        me.y += my * speed;
+                    }
+
                     me.x = Math.max(20, Math.min(CANVAS.width - 20, me.x));
                     me.y = Math.max(20, Math.min(CANVAS.height - 20, me.y));
-
-                    if (this.input.fire) this.triggerFire();
                 }
             }
 
-            this.updateBullets(now);
+            this.updateBullets();
+            this.updateParticles();
 
             if (now - this.lastSyncTime > SYNC_INTERVAL) {
                 this.syncToFirestore();
@@ -667,7 +694,7 @@
             }
         }
 
-        updateBullets(now) {
+        updateBullets() {
             // 移動
             this.localBullets.forEach(b => {
                 b.x += b.vx;
@@ -679,7 +706,7 @@
                 b.x > 0 && b.x < CANVAS.width && b.y > 0 && b.y < CANVAS.height
             );
 
-            // 当たり判定 (貫通防止のためGuestも判定して消す)
+            // 当たり判定
             this.localBullets = this.localBullets.filter(b => {
                 let hit = false;
                 const targetId = b.owner === 'p1' ? 'p2' : 'p1';
@@ -692,7 +719,7 @@
                     if (Math.hypot(dx, dy) < PLAYER_RADIUS + b.r) {
                         hit = true; 
                         
-                        // ★ HP計算はHostのみ
+                        // HP計算 (Hostのみ)
                         if (this.isHost) {
                             const dmg = b.isUlt ? 20 : 10;
                             target.hp -= dmg;
@@ -700,7 +727,7 @@
                             // ULTチャージ (被弾)
                             target.ult = Math.min(ULT_MAX, target.ult + ULT_CHARGE_HIT);
 
-                            if (b.isUlt) target.slowUntil = now + 3000;
+                            if (b.isUlt) target.slowUntil = Date.now() + 3000;
 
                             if (target.hp <= 0) {
                                 target.hp = 0;
@@ -711,6 +738,20 @@
                 }
                 return !hit; 
             });
+        }
+
+        updateParticles() {
+            this.localBullets.forEach(b => {
+                // 弾の軌跡用パーティクル（簡易）
+                if (Math.random() < 0.3) {
+                    this.particles.push({
+                        x: b.x, y: b.y, life: 5, color: b.isUlt ? '#d000ff' : '#ffff00', size: 2
+                    });
+                }
+            });
+
+            this.particles.forEach(p => p.life--);
+            this.particles = this.particles.filter(p => p.life > 0);
         }
 
         checkTimeOver() {
@@ -746,13 +787,11 @@
         }
 
         updateUI() {
-            // Timer
             const timerEl = document.getElementById('timer-container');
             if (timerEl) {
                 timerEl.innerText = Math.max(0, Math.ceil(this.state.remainingTime));
             }
 
-            // HP Bars (Width Only)
             const p1 = this.state.players.p1;
             const p2 = this.state.players.p2;
             
@@ -768,7 +807,6 @@
                 barP2.style.backgroundColor = p2.hp > 30 ? '#0f0' : '#f00';
             }
 
-            // ULT (自分の分だけ)
             const myUlt = this.state.players[this.myId]?.ult || 0;
             const barUlt = document.getElementById('bar-ult');
             if (barUlt) {
@@ -817,18 +855,14 @@
             if (!this.isHost) return;
             
             const now = Date.now();
-            
-            // リセット
             this.state.players.p1.hp = 100;
             this.state.players.p1.x = 100;
             this.state.players.p1.ult = 0;
             this.state.players.p1.slowUntil = 0;
-            
             this.state.players.p2.hp = 100;
             this.state.players.p2.x = CANVAS.width - 100;
             this.state.players.p2.ult = 0;
             this.state.players.p2.slowUntil = 0;
-            
             this.state.remainingTime = GAME_DURATION;
             this.state.startTime = now;
             this.state.status = "playing";
@@ -851,7 +885,6 @@
         async disbandRoom() {
             if (!this.isHost) return;
             try {
-                // deleteDocではなくstatus: closedにする
                 await updateDoc(doc(db, "rooms", this.roomId), { status: "closed" });
                 location.reload();
             } catch (e) { console.error("Disband Error:", e); }
@@ -871,7 +904,6 @@
                 CTX.fillStyle = pid === 'p1' ? '#00ccff' : '#00ff00';
                 CTX.fill();
                 
-                // Slow Effect
                 if (Date.now() < p.slowUntil) {
                     CTX.strokeStyle = '#00ffff';
                     CTX.lineWidth = 3;
@@ -881,6 +913,14 @@
                     CTX.lineWidth = 2;
                     CTX.stroke();
                 }
+            });
+
+            // Particles
+            this.particles.forEach(p => {
+                CTX.beginPath();
+                CTX.arc(p.x, p.y, p.size || 3, 0, Math.PI*2);
+                CTX.fillStyle = p.color;
+                CTX.fill();
             });
 
             // Bullets
@@ -899,31 +939,39 @@
                 CTX.shadowBlur = 0;
             });
 
-            // Stick
+            // Virtual Sticks
+            // Move Stick (Left)
+            if (this.input.move.active) {
+                this.drawStick(this.input.move.baseX, this.input.move.baseY, this.input.move.x, this.input.move.y);
+            }
+
+            // Aim Stick (Right)
+            if (this.input.aim.active) {
+                this.drawStick(this.input.aim.baseX, this.input.aim.baseY, this.input.aim.x, this.input.aim.y, true);
+                
+                // エイムライン
+                CTX.beginPath();
+                CTX.moveTo(this.input.aim.baseX, this.input.aim.baseY);
+                CTX.lineTo(
+                    this.input.aim.baseX + Math.cos(this.input.aim.angle) * 100, 
+                    this.input.aim.baseY + Math.sin(this.input.aim.angle) * 100
+                );
+                CTX.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+                CTX.lineWidth = 2;
+                CTX.stroke();
+            }
+        }
+
+        drawStick(baseX, baseY, inputX, inputY, isAim = false) {
             CTX.beginPath();
-            CTX.arc(this.stickBase.x, this.stickBase.y, 50, 0, Math.PI*2);
+            CTX.arc(baseX, baseY, 50, 0, Math.PI*2);
             CTX.strokeStyle = 'rgba(255,255,255,0.3)';
             CTX.lineWidth = 2;
             CTX.stroke();
             CTX.beginPath();
-            CTX.arc(this.stickBase.x + this.input.x*50, this.stickBase.y + this.input.y*50, 25, 0, Math.PI*2);
-            CTX.fillStyle = 'rgba(255,255,255,0.5)';
+            CTX.arc(baseX + inputX*50, baseY + inputY*50, 25, 0, Math.PI*2);
+            CTX.fillStyle = isAim ? 'rgba(255,50,50,0.5)' : 'rgba(255,255,255,0.5)';
             CTX.fill();
-
-            // Fire Button
-            const fireX = CANVAS.width - 100;
-            const fireY = CANVAS.height - 120;
-            CTX.beginPath();
-            CTX.arc(fireX, fireY, 40, 0, Math.PI*2);
-            CTX.fillStyle = this.input.fire ? 'rgba(255,50,50,0.6)' : 'rgba(255,50,50,0.3)';
-            CTX.fill();
-            CTX.strokeStyle = 'white';
-            CTX.lineWidth = 2;
-            CTX.stroke();
-            CTX.fillStyle = 'white';
-            CTX.font = '14px Arial';
-            CTX.textAlign = 'center';
-            CTX.fillText("FIRE", fireX, fireY + 5);
         }
 
         loop(timestamp) {
@@ -955,30 +1003,90 @@
                 const touches = e.changedTouches;
                 for (let i = 0; i < touches.length; i++) {
                     const t = touches[i];
-                    
-                    if (t.clientX < CANVAS.width / 2) {
-                        this.touchId = t.identifier;
-                        const dx = t.clientX - this.stickBase.x;
-                        const dy = t.clientY - this.stickBase.y;
-                        const dist = Math.hypot(dx, dy);
-                        const max = 50;
-                        if (dist > max) { this.input.x = (dx / dist); this.input.y = (dy / dist); }
-                        else { this.input.x = dx / max; this.input.y = dy / max; }
-                    } else {
-                        const dist = Math.hypot(t.clientX - (CANVAS.width - 100), t.clientY - (CANVAS.height - 120));
-                        if (dist < 60) this.input.fire = true;
+                    const x = t.clientX;
+                    const y = t.clientY;
+
+                    // Left side: Move Stick
+                    if (x < CANVAS.width / 2) {
+                        if (!this.input.move.active) {
+                            this.input.move.active = true;
+                            this.input.move.id = t.identifier;
+                            this.input.move.baseX = x;
+                            this.input.move.baseY = y;
+                            this.input.move.x = 0;
+                            this.input.move.y = 0;
+                        } else if (this.input.move.id === t.identifier) {
+                            const dx = x - this.input.move.baseX;
+                            const dy = y - this.input.move.baseY;
+                            const dist = Math.hypot(dx, dy);
+                            const max = 50;
+                            const angle = Math.atan2(dy, dx);
+                            if (dist > max) {
+                                this.input.move.x = Math.cos(angle);
+                                this.input.move.y = Math.sin(angle);
+                            } else {
+                                this.input.move.x = dx / max;
+                                this.input.move.y = dy / max;
+                            }
+                            this.input.move.angle = angle;
+                        }
+                    } 
+                    // Right side: Aim Stick
+                    else {
+                        // ULTボタンエリア除外
+                        const ultRect = document.getElementById('btn-ult').getBoundingClientRect();
+                        if (x >= ultRect.left && x <= ultRect.right && y >= ultRect.top && y <= ultRect.bottom) {
+                            continue;
+                        }
+
+                        if (!this.input.aim.active) {
+                            this.input.aim.active = true;
+                            this.input.aim.id = t.identifier;
+                            this.input.aim.baseX = x;
+                            this.input.aim.baseY = y;
+                            this.input.aim.x = 0;
+                            this.input.aim.y = 0;
+                        } else if (this.input.aim.id === t.identifier) {
+                            const dx = x - this.input.aim.baseX;
+                            const dy = y - this.input.aim.baseY;
+                            const dist = Math.hypot(dx, dy);
+                            const max = 50;
+                            const angle = Math.atan2(dy, dx);
+                            if (dist > max) {
+                                this.input.aim.x = Math.cos(angle);
+                                this.input.aim.y = Math.sin(angle);
+                            } else {
+                                this.input.aim.x = dx / max;
+                                this.input.aim.y = dy / max;
+                            }
+                            this.input.aim.angle = angle;
+                        }
                     }
                 }
             };
+
             const handleEnd = (e) => {
                 e.preventDefault();
                 const touches = e.changedTouches;
                 for (let i = 0; i < touches.length; i++) {
                     const t = touches[i];
-                    if (t.identifier === this.touchId) { this.input.x = 0; this.input.y = 0; this.touchId = null; }
-                    if (t.clientX > CANVAS.width / 2) this.input.fire = false;
+                    if (this.input.move.id === t.identifier) {
+                        this.input.move.active = false;
+                        this.input.move.id = null;
+                        this.input.move.x = 0;
+                        this.input.move.y = 0;
+                    }
+                    if (this.input.aim.id === t.identifier) {
+                        // Fire on release
+                        this.triggerFire(this.input.aim.angle);
+                        this.input.aim.active = false;
+                        this.input.aim.id = null;
+                        this.input.aim.x = 0;
+                        this.input.aim.y = 0;
+                    }
                 }
             };
+
             CANVAS.addEventListener('touchstart', handleTouch, {passive: false});
             CANVAS.addEventListener('touchmove', handleTouch, {passive: false});
             CANVAS.addEventListener('touchend', handleEnd, {passive: false});
