@@ -468,8 +468,8 @@
                 }
 
                 // 4. プレイヤー情報同期
-                // HostはP2の操作のみ受信、GuestはP1全情報と自分のステータス(HP/ULT)を受信
                 if (this.isHost) {
+                    // Host: P2の入力系のみ受信
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
                         p2.x = data.players.p2.x;
@@ -478,11 +478,10 @@
                         p2.active = data.players.p2.active;
                     }
                 } else {
-                    // Guest: P1を完全同期
+                    // Guest: P1全情報 + 自分のStatus(HP, Ult, Slow)を受信
                     if (data.players.p1) {
                         Object.assign(this.state.players.p1, data.players.p1);
                     }
-                    // Guest: 自分のステータス(HP, ULT, Slow)はHost計算値を信頼
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
                         p2.hp = data.players.p2.hp;
@@ -492,7 +491,6 @@
                     }
                 }
                 
-                // UI更新はここで一括
                 this.updateUI();
             });
         }
@@ -504,7 +502,7 @@
 
             try {
                 if (this.isHost) {
-                    // Host: 権限を持つすべてのデータ(全HP, 全ULT, 時間, P1座標)を送信
+                    // Host: 全データの権限を持つ
                     await updateDoc(ref, {
                         "remainingTime": Math.ceil(this.state.remainingTime),
                         
@@ -520,7 +518,7 @@
                         "players.p2.slowUntil": this.state.players.p2.slowUntil
                     });
                 } else {
-                    // Guest: 自分の操作入力(座標, 発射フラグ)のみ送信
+                    // Guest: 操作のみ送信
                     await updateDoc(ref, {
                         "players.p2.x": me.x,
                         "players.p2.y": me.y,
@@ -546,9 +544,7 @@
             const me = this.state.players[this.myId];
             if (me.ult < ULT_MAX) return;
 
-            // Hostなら即減らす、Guestならサーバー同期を待つが、見た目上即0にしておく
             me.ult = 0;
-
             this.spawnBulletLocal(this.myId, true);
             this.sendFireEvent(true);
         }
@@ -588,7 +584,7 @@
             this.lastFrameTime = now;
 
             if (this.state.status === "playing") {
-                // 1. Host Logic: Timer & Passive ULT
+                // 1. Host Logic
                 if (this.isHost) {
                     // Timer
                     if (now - this.lastTimeTick > 1000) {
@@ -598,7 +594,7 @@
                             this.checkTimeOver();
                         }
                     }
-                    // Passive ULT Charge
+                    // Passive ULT Charge (Hostが計算してSyncで送る)
                     ['p1', 'p2'].forEach(pid => {
                         const p = this.state.players[pid];
                         if (p.active && p.ult < ULT_MAX) {
@@ -656,7 +652,7 @@
                     if (Math.hypot(dx, dy) < PLAYER_RADIUS + b.r) {
                         hit = true; 
                         
-                        // ★重要: HP計算権限はHostのみ
+                        // ★ HP計算はHostのみ
                         if (this.isHost) {
                             const dmg = b.isUlt ? 20 : 10;
                             target.hp -= dmg;
@@ -673,7 +669,7 @@
                         }
                     }
                 }
-                return !hit; // Hitしたら配列から消える
+                return !hit; 
             });
         }
 
@@ -711,30 +707,39 @@
 
         updateUI() {
             // Timer
-            document.getElementById('timer-container').innerText = Math.max(0, Math.floor(this.state.remainingTime));
+            const timerEl = document.getElementById('timer-container');
+            if (timerEl) {
+                timerEl.innerText = Math.max(0, Math.floor(this.state.remainingTime));
+            }
 
-            // HP
+            // HP Bars (Width Only)
             const p1 = this.state.players.p1;
             const p2 = this.state.players.p2;
-            document.getElementById('text-hp-p1').innerText = Math.floor(p1.hp);
-            document.getElementById('bar-hp-p1').style.width = p1.hp + "%";
             
-            document.getElementById('text-hp-p2').innerText = Math.floor(p2.hp);
-            document.getElementById('bar-hp-p2').style.width = p2.hp + "%";
+            const barP1 = document.getElementById('bar-hp-p1');
+            if (barP1) {
+                barP1.style.width = Math.max(0, p1.hp) + "%";
+                barP1.style.backgroundColor = p1.hp > 30 ? '#0f0' : '#f00';
+            }
 
-            // HP Bar Color (Pinch)
-            const p1bar = document.getElementById('bar-hp-p1');
-            p1bar.style.backgroundColor = p1.hp > 30 ? '#0f0' : '#f00';
-            const p2bar = document.getElementById('bar-hp-p2');
-            p2bar.style.backgroundColor = p2.hp > 30 ? '#0f0' : '#f00';
+            const barP2 = document.getElementById('bar-hp-p2');
+            if (barP2) {
+                barP2.style.width = Math.max(0, p2.hp) + "%";
+                barP2.style.backgroundColor = p2.hp > 30 ? '#0f0' : '#f00';
+            }
 
             // ULT (自分の分だけ)
             const myUlt = this.state.players[this.myId]?.ult || 0;
-            document.getElementById('bar-ult').style.width = myUlt + "%";
+            const barUlt = document.getElementById('bar-ult');
+            if (barUlt) {
+                barUlt.style.width = Math.min(100, Math.max(0, myUlt)) + "%";
+            }
             
             const btnUlt = document.getElementById('btn-ult');
-            if (myUlt >= ULT_MAX) btnUlt.classList.add('ready');
-            else btnUlt.classList.remove('ready');
+            if (btnUlt) {
+                if (myUlt >= ULT_MAX) btnUlt.classList.add('ready');
+                else btnUlt.classList.remove('ready');
+            }
         }
 
         showResult(winnerId) {
@@ -787,8 +792,12 @@
             this.localBullets = []; 
 
             await updateDoc(doc(db, "rooms", this.roomId), {
-                "players.p1": this.state.players.p1,
-                "players.p2": this.state.players.p2,
+                "players.p1.hp": 100,
+                "players.p1.x": 100,
+                "players.p1.ult": 0,
+                "players.p2.hp": 100,
+                "players.p2.x": CANVAS.width - 100,
+                "players.p2.ult": 0,
                 "status": "playing",
                 "remainingTime": GAME_DURATION,
                 "winner": null
