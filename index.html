@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crown Arena</title>
+    <title>Crown Arena v1.0</title>
     <style>
         body {
             margin: 0;
@@ -199,7 +199,7 @@
 
     <div id="layer-menu" class="layer">
         <div class="panel">
-            <h1>Crown Arena</h1>
+            <h1>Crown Arena v1.0</h1>
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
             <div style="margin: 10px 0; color:#666;">- OR -</div>
             <input type="number" id="input-room" placeholder="4-Digit Room ID">
@@ -314,8 +314,9 @@
                     p1: { x: 100, y: 100, hp: 100, isShooting: false, active: false, ult: 0, slowUntil: 0 },
                     p2: { x: 300, y: 100, hp: 100, isShooting: false, active: false, ult: 0, slowUntil: 0 }
                 },
-                status: "waiting", // waiting, playing, finished
+                status: "waiting", // waiting, playing, finished, closed
                 remainingTime: GAME_DURATION,
+                startTime: null, // ゲーム開始時刻(timestamp)
                 bulletSeq: 0,
                 ultSeq: 0
             };
@@ -329,7 +330,6 @@
             
             // Timers
             this.lastSyncTime = 0;
-            this.lastTimeTick = 0;
             this.lastFrameTime = Date.now();
             this.unsubscribe = null;
             this.isRoomReady = false;
@@ -378,7 +378,7 @@
                     p2: { x: 300, y: 100, hp: 100, isShooting: false, active: false, ult: 0, slowUntil: 0 }
                 },
                 status: "waiting",
-                remainingTime: GAME_DURATION,
+                startTime: null,
                 winner: null,
                 bulletSeq: 0,
                 ultSeq: 0,
@@ -393,7 +393,8 @@
                 document.getElementById('room-id-display').innerText = "Room: " + this.roomId;
                 this.subscribeToRoom();
             } catch (e) {
-                alert("Error: " + e.message);
+                console.error("Create Error:", e);
+                alert("Error creating room.");
             }
         }
 
@@ -401,7 +402,15 @@
             const docRef = doc(db, "rooms", id);
             try {
                 const snap = await getDoc(docRef);
-                if (!snap.exists()) { alert("Room not found!"); return; }
+                if (!snap.exists()) { 
+                    alert("Room not found!"); 
+                    return; 
+                }
+                const data = snap.data();
+                if (data.status === "closed") {
+                    alert("Room is closed.");
+                    return;
+                }
 
                 this.roomId = id;
                 this.isHost = false;
@@ -414,8 +423,7 @@
 
                 await updateDoc(docRef, {
                     "players.p2.active": true,
-                    "players.p2.x": this.state.players.p2.x,
-                    "status": "playing"
+                    "players.p2.x": this.state.players.p2.x
                 });
 
                 document.getElementById('room-id-display').innerText = "Room: " + this.roomId;
@@ -423,7 +431,8 @@
                 this.subscribeToRoom();
 
             } catch (e) {
-                alert("Error joining: " + e.message);
+                console.error("Join Error:", e);
+                alert("Error joining room.");
             }
         }
 
@@ -431,13 +440,29 @@
             if (this.unsubscribe) this.unsubscribe();
             
             this.unsubscribe = onSnapshot(doc(db, "rooms", this.roomId), (docSnap) => {
+                // 1. ドキュメントが存在しない場合のハンドリング
                 if (!docSnap.exists()) {
-                    if (this.isRoomReady) { alert("Room disbanded."); location.reload(); }
+                    // すでに準備完了後にドキュメントが消えた場合はエラー扱いだが
+                    // 一瞬消える現象対策のため、即リロードせずログだけ出す
+                    console.warn("Snapshot: Document does not exist (ignoring temporary glitch)");
                     return;
                 }
                 const data = docSnap.data();
                 
-                // 1. ステータス同期
+                // 2. 部屋がクローズされた場合
+                if (data.status === "closed") {
+                    alert("Room was closed by host.");
+                    location.reload();
+                    return;
+                }
+
+                // 3. ゲーム開始処理 (Host Only)
+                // P2が入ってきた(activeになった)ら、Hostが開始時間を設定してPlayingにする
+                if (this.isHost && this.state.status === "waiting" && data.players.p2 && data.players.p2.active) {
+                    this.startGameAsHost();
+                }
+
+                // 4. ステータス同期
                 if (data.status === "playing") {
                     this.switchLayer(null); 
                     this.state.status = "playing";
@@ -448,12 +473,12 @@
                     this.showResult(data.winner);
                 }
 
-                // 2. タイマー同期
-                if (data.remainingTime !== undefined) {
-                    this.state.remainingTime = data.remainingTime;
+                // 5. タイマー基準時間同期
+                if (data.startTime) {
+                    this.state.startTime = data.startTime;
                 }
 
-                // 3. 弾丸イベント
+                // 6. 弾丸イベント
                 if (data.bulletSeq > this.state.bulletSeq) {
                     if (data.lastShooter !== this.myId) {
                         this.spawnBulletFromSync(data.lastShooter, false);
@@ -467,9 +492,8 @@
                     this.state.ultSeq = data.ultSeq;
                 }
 
-                // 4. プレイヤー情報同期
+                // 7. プレイヤー情報同期
                 if (this.isHost) {
-                    // Host: P2の入力系のみ受信
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
                         p2.x = data.players.p2.x;
@@ -478,7 +502,7 @@
                         p2.active = data.players.p2.active;
                     }
                 } else {
-                    // Guest: P1全情報 + 自分のStatus(HP, Ult, Slow)を受信
+                    // Guest: P1全情報 + 自分のステータス(Host計算)を受信
                     if (data.players.p1) {
                         Object.assign(this.state.players.p1, data.players.p1);
                     }
@@ -495,6 +519,22 @@
             });
         }
 
+        async startGameAsHost() {
+            // Hostが開始時刻を決定して書き込む
+            const now = Date.now();
+            this.state.startTime = now;
+            this.state.status = "playing";
+            
+            try {
+                await updateDoc(doc(db, "rooms", this.roomId), {
+                    startTime: now,
+                    status: "playing"
+                });
+            } catch(e) {
+                console.error("Start Game Error:", e);
+            }
+        }
+
         async syncToFirestore() {
             if (!this.roomId || this.state.status === "finished") return;
             const ref = doc(db, "rooms", this.roomId);
@@ -502,10 +542,8 @@
 
             try {
                 if (this.isHost) {
-                    // Host: 全データの権限を持つ
+                    // Host: 権限を持つすべてのデータを送信
                     await updateDoc(ref, {
-                        "remainingTime": Math.ceil(this.state.remainingTime),
-                        
                         "players.p1.x": me.x,
                         "players.p1.y": me.y,
                         "players.p1.isShooting": me.isShooting,
@@ -583,18 +621,20 @@
             const deltaTimeSec = (now - this.lastFrameTime) / 1000;
             this.lastFrameTime = now;
 
+            // タイマー計算 (Host/Guest共通: startTime基準)
+            if (this.state.status === "playing" && this.state.startTime) {
+                const elapsed = (now - this.state.startTime) / 1000;
+                this.state.remainingTime = Math.max(0, GAME_DURATION - elapsed);
+                
+                // 時間切れ判定 (Hostのみ)
+                if (this.isHost && this.state.remainingTime <= 0) {
+                    this.checkTimeOver();
+                }
+            }
+
             if (this.state.status === "playing") {
-                // 1. Host Logic
+                // 1. Host Logic (Passive ULT)
                 if (this.isHost) {
-                    // Timer
-                    if (now - this.lastTimeTick > 1000) {
-                        this.state.remainingTime -= 1;
-                        this.lastTimeTick = now;
-                        if (this.state.remainingTime <= 0) {
-                            this.checkTimeOver();
-                        }
-                    }
-                    // Passive ULT Charge (Hostが計算してSyncで送る)
                     ['p1', 'p2'].forEach(pid => {
                         const p = this.state.players[pid];
                         if (p.active && p.ult < ULT_MAX) {
@@ -709,7 +749,7 @@
             // Timer
             const timerEl = document.getElementById('timer-container');
             if (timerEl) {
-                timerEl.innerText = Math.max(0, Math.floor(this.state.remainingTime));
+                timerEl.innerText = Math.max(0, Math.ceil(this.state.remainingTime));
             }
 
             // HP Bars (Width Only)
@@ -776,6 +816,8 @@
         async restartGame() {
             if (!this.isHost) return;
             
+            const now = Date.now();
+            
             // リセット
             this.state.players.p1.hp = 100;
             this.state.players.p1.x = 100;
@@ -788,6 +830,7 @@
             this.state.players.p2.slowUntil = 0;
             
             this.state.remainingTime = GAME_DURATION;
+            this.state.startTime = now;
             this.state.status = "playing";
             this.localBullets = []; 
 
@@ -800,6 +843,7 @@
                 "players.p2.ult": 0,
                 "status": "playing",
                 "remainingTime": GAME_DURATION,
+                "startTime": now,
                 "winner": null
             });
         }
@@ -807,9 +851,10 @@
         async disbandRoom() {
             if (!this.isHost) return;
             try {
-                await deleteDoc(doc(db, "rooms", this.roomId));
+                // deleteDocではなくstatus: closedにする
+                await updateDoc(doc(db, "rooms", this.roomId), { status: "closed" });
                 location.reload();
-            } catch (e) { console.error(e); }
+            } catch (e) { console.error("Disband Error:", e); }
         }
 
         draw() {
