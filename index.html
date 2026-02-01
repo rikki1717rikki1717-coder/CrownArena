@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Firestore Shooter Final Fixed</title>
+    <title>Firestore Shooter Event-Driven</title>
     <style>
         body {
             margin: 0;
@@ -178,11 +178,11 @@
 
 <script type="module">
     // ---------------------------------------------------------
-    // 1. Firebase Config
+    // 1. Firebase Config & Imports
     // ---------------------------------------------------------
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { 
-        getFirestore, doc, setDoc, updateDoc, onSnapshot, getDoc, deleteDoc 
+        getFirestore, doc, setDoc, updateDoc, onSnapshot, getDoc, deleteDoc, increment 
     } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -224,24 +224,25 @@
             // ゲーム状態
             this.state = {
                 players: {
-                    p1: { x: 100, y: 100, hp: 100, isShooting: false, active: false, lastFire: 0 },
-                    p2: { x: 300, y: 100, hp: 100, isShooting: false, active: false, lastFire: 0 }
+                    p1: { x: 100, y: 100, hp: 100, active: false, lastFire: 0 },
+                    p2: { x: 300, y: 100, hp: 100, active: false, lastFire: 0 }
                 },
                 status: "waiting", // waiting, playing, finished
-                winner: null
+                winner: null,
+                bulletSeq: 0 // 受信した最新の弾丸シーケンス番号
             };
 
-            this.localBullets = []; // Client Prediction用
+            this.localBullets = []; // 弾丸は完全にローカル管理
 
             // Input
-            this.input = { x: 0, y: 0, fire: false };
+            this.input = { x: 0, y: 0, fire: false, firedPressed: false };
             this.touchId = null;
             this.stickBase = { x: 100, y: 300 };
             
             // Timers
             this.lastSyncTime = 0;
-            this.unsubscribe = null; // Snapshot解除用
-            this.isRoomReady = false; // 部屋作成完了フラグ
+            this.unsubscribe = null;
+            this.isRoomReady = false;
 
             this.resize();
             window.addEventListener('resize', () => this.resize());
@@ -276,26 +277,24 @@
             this.state.players.p1.active = true;
             this.state.players.p1.x = 100;
             this.state.players.p1.hp = 100;
-            this.state.players.p2.active = false;
 
             const initialData = {
                 players: {
-                    p1: { x: 100, y: 100, hp: 100, isShooting: false, active: true },
-                    p2: { x: 300, y: 100, hp: 100, isShooting: false, active: false }
+                    p1: { x: 100, y: 100, hp: 100, active: true },
+                    p2: { x: 300, y: 100, hp: 100, active: false }
                 },
                 status: "waiting",
-                winner: null
+                winner: null,
+                bulletSeq: 0,      // 弾丸発射カウンター
+                lastShooter: null  // 最後に撃った人
             };
 
             try {
-                // ドキュメントを作成してから監視を開始する
                 await setDoc(doc(db, "rooms", this.roomId), initialData);
-                
-                this.isRoomReady = true; // 作成完了フラグ
+                this.isRoomReady = true;
                 this.switchLayer('wait');
                 document.getElementById('room-display').innerText = this.roomId;
                 document.getElementById('hud-room').innerText = this.roomId;
-                
                 this.subscribeToRoom();
             } catch (e) {
                 alert("Error: " + e.message);
@@ -335,49 +334,50 @@
             if (this.unsubscribe) this.unsubscribe();
             
             this.unsubscribe = onSnapshot(doc(db, "rooms", this.roomId), (docSnap) => {
-                // 1. 部屋削除チェック (自分が作成中/参加中なのにドキュメントが消えた場合)
                 if (!docSnap.exists()) {
-                    if (this.isRoomReady) {
-                        alert("Room was disbanded.");
-                        location.reload();
-                    }
+                    if (this.isRoomReady) { alert("Room disbanded."); location.reload(); }
                     return;
                 }
-
                 const data = docSnap.data();
                 
-                // 2. ステータス管理
+                // 1. ステータス同期
                 if (data.status === "playing") {
-                    this.switchLayer(null); // ゲーム画面へ
+                    this.switchLayer(null);
                     this.state.status = "playing";
                 } else if (data.status === "finished") {
                     this.state.status = "finished";
                     this.showResult(data.winner);
                 }
 
-                // 3. データ同期
+                // 2. 弾丸同期 (イベント検知)
+                // サーバーの bulletSeq が増えていれば、新しい弾が撃たれたということ
+                if (data.bulletSeq > this.state.bulletSeq) {
+                    // 自分以外が撃った弾なら生成する (自分のは発射時に即生成済み)
+                    if (data.lastShooter !== this.myId) {
+                        this.spawnBulletFromSync(data.lastShooter);
+                    }
+                    this.state.bulletSeq = data.bulletSeq;
+                }
+
+                // 3. プレイヤー同期
                 if (this.isHost) {
-                    // Host: P2の入力のみ受け取る
+                    // Host: P2の位置のみ受信
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
                         p2.x = data.players.p2.x;
                         p2.y = data.players.p2.y;
-                        p2.isShooting = data.players.p2.isShooting;
                         p2.active = data.players.p2.active;
                     }
                 } else {
-                    // Guest: P1の全情報と、正規のHP情報を受け取る
+                    // Guest: P1の位置・HPと、自分のHP(Host計算)を受信
                     if (data.players.p1) {
                         Object.assign(this.state.players.p1, data.players.p1);
                     }
                     if (data.players.p2) {
-                        // 自分のHPはHostが計算するので受け取る
-                        this.state.players.p2.hp = data.players.p2.hp;
+                        this.state.players.p2.hp = data.players.p2.hp; // Hostが減らしたHP
                         this.state.players.p2.active = data.players.p2.active;
                     }
                 }
-                
-                // HUD更新
                 this.updateHUD();
             });
         }
@@ -389,25 +389,63 @@
 
             try {
                 if (this.isHost) {
-                    // Host: 自分の情報 + 相手のHP (判定結果) + ステータス
                     await updateDoc(ref, {
                         "players.p1.x": me.x,
                         "players.p1.y": me.y,
-                        "players.p1.isShooting": me.isShooting,
-                        "players.p1.hp": this.state.players.p1.hp, 
-                        "players.p2.hp": this.state.players.p2.hp
+                        "players.p1.hp": this.state.players.p1.hp, // 自分のHPもHostが管理
+                        "players.p2.hp": this.state.players.p2.hp  // 相手のHPもHostが管理
                     });
                 } else {
-                    // Guest: 自分の情報のみ
                     await updateDoc(ref, {
                         "players.p2.x": me.x,
-                        "players.p2.y": me.y,
-                        "players.p2.isShooting": me.isShooting
+                        "players.p2.y": me.y
                     });
                 }
-            } catch (e) {
-                // Ignore transient errors
-            }
+            } catch (e) { /* ignore lag */ }
+        }
+
+        // --- Bullet Logic (Event Driven) ---
+
+        // 自分が撃つとき (ローカル即生成 + DB更新)
+        async triggerFire() {
+            const now = Date.now();
+            const me = this.state.players[this.myId];
+            
+            // クールダウンチェック
+            if (now - (me.lastFire || 0) < FIRE_RATE) return;
+            me.lastFire = now;
+
+            // 1. ローカルで即座に弾を出す (Client Prediction)
+            this.spawnBulletLocal(this.myId);
+
+            // 2. Firestoreのカウンターを増やす
+            const ref = doc(db, "rooms", this.roomId);
+            try {
+                await updateDoc(ref, {
+                    bulletSeq: increment(1),
+                    lastShooter: this.myId
+                });
+            } catch (e) { console.error("Fire error", e); }
+        }
+
+        // 相手が撃ったとき (Snapshot検知で生成)
+        spawnBulletFromSync(shooterId) {
+            this.spawnBulletLocal(shooterId);
+        }
+
+        // 共通: 弾生成ロジック
+        spawnBulletLocal(ownerId) {
+            const p = this.state.players[ownerId];
+            if (!p || !p.active) return;
+
+            let vx = (ownerId === 'p1') ? BULLET_SPEED : -BULLET_SPEED;
+            this.localBullets.push({
+                x: p.x, 
+                y: p.y, 
+                vx: vx, 
+                vy: 0, 
+                owner: ownerId
+            });
         }
 
         // --- Game Loop ---
@@ -415,7 +453,7 @@
         update() {
             const now = Date.now();
 
-            // 1. 移動 (Local Prediction)
+            // 1. 自分の移動
             if (this.state.status === "playing") {
                 const me = this.state.players[this.myId];
                 if (me) {
@@ -423,33 +461,25 @@
                     me.y += this.input.y * MOVE_SPEED;
                     me.x = Math.max(20, Math.min(CANVAS.width - 20, me.x));
                     me.y = Math.max(20, Math.min(CANVAS.height - 20, me.y));
-                    me.isShooting = this.input.fire;
+
+                    // 発射チェック
+                    if (this.input.fire) {
+                        this.triggerFire();
+                    }
                 }
             }
 
-            // 2. 弾処理 (Both Sides simulate visually)
-            this.updateBullets(now);
+            // 2. 弾の移動と当たり判定 (ローカル計算)
+            this.updateBullets();
 
-            // 3. 同期
+            // 3. 座標同期
             if (now - this.lastSyncTime > SYNC_INTERVAL) {
                 this.syncToFirestore();
                 this.lastSyncTime = now;
             }
         }
 
-        updateBullets(now) {
-            // 生成
-            ['p1', 'p2'].forEach(pid => {
-                const p = this.state.players[pid];
-                if (p.active && p.isShooting && this.state.status === "playing") {
-                    if (now - (p.lastFire || 0) > FIRE_RATE) {
-                        let vx = (pid === 'p1') ? BULLET_SPEED : -BULLET_SPEED;
-                        this.localBullets.push({ x: p.x, y: p.y, vx: vx, vy: 0, owner: pid });
-                        p.lastFire = now;
-                    }
-                }
-            });
-
+        updateBullets() {
             // 移動
             this.localBullets.forEach(b => {
                 b.x += b.vx;
@@ -461,7 +491,7 @@
                 b.x > 0 && b.x < CANVAS.width && b.y > 0 && b.y < CANVAS.height
             );
 
-            // 当たり判定 (貫通防止のため、GuestもVisual Collisionを行う)
+            // 当たり判定 (Visual + Host Logic)
             this.localBullets = this.localBullets.filter(b => {
                 let hit = false;
                 const targetId = b.owner === 'p1' ? 'p2' : 'p1';
@@ -480,24 +510,21 @@
                             target.hp -= 10;
                             if (target.hp <= 0) {
                                 target.hp = 0;
-                                // 相手を倒したので、自分が勝者
-                                this.endGame(b.owner); 
+                                this.endGame(b.owner); // 勝者を渡す
                             }
                         }
                     }
                 }
-                return !hit; // 当たったら弾を消す（HostもGuestも見た目上消える）
+                return !hit; // 当たったら消す
             });
         }
 
         async endGame(winnerId) {
             if (!this.isHost) return;
-            // 既に終了していたら何もしない
             if (this.state.status === "finished") return;
 
             this.state.status = "finished";
             
-            // Firestoreに結果送信
             await updateDoc(doc(db, "rooms", this.roomId), {
                 "status": "finished",
                 "winner": winnerId,
@@ -520,7 +547,6 @@
             const title = document.getElementById('result-title');
             const msg = document.getElementById('result-msg');
             
-            // 勝敗判定
             const amIWinner = (winnerId === this.myId);
             
             if (amIWinner) {
@@ -533,7 +559,6 @@
                 msg.innerText = "Try again next time.";
             }
 
-            // ボタン表示制御
             if (this.isHost) {
                 document.getElementById('host-controls').classList.remove('hidden');
                 document.getElementById('guest-controls').classList.add('hidden');
@@ -546,13 +571,13 @@
         async restartGame() {
             if (!this.isHost) return;
             
-            // HPリセット
+            // リセット
             this.state.players.p1.hp = 100;
             this.state.players.p1.x = 100;
             this.state.players.p2.hp = 100;
             this.state.players.p2.x = CANVAS.width - 100;
             this.state.status = "playing";
-            this.localBullets = []; // 弾リセット
+            this.localBullets = []; 
 
             await updateDoc(doc(db, "rooms", this.roomId), {
                 "players.p1.hp": 100,
@@ -569,15 +594,12 @@
             try {
                 await deleteDoc(doc(db, "rooms", this.roomId));
                 location.reload();
-            } catch (e) {
-                console.error(e);
-            }
+            } catch (e) { console.error(e); }
         }
 
         updateHUD() {
             document.getElementById('text-hp-p1').innerText = this.state.players.p1.hp;
             document.getElementById('bar-hp-p1').style.width = this.state.players.p1.hp + "%";
-            
             document.getElementById('text-hp-p2').innerText = this.state.players.p2.hp;
             document.getElementById('bar-hp-p2').style.width = this.state.players.p2.hp + "%";
         }
@@ -648,8 +670,6 @@
                 if(id.length === 4) this.joinRoom(id);
                 else alert("Enter 4 digits");
             };
-            
-            // Result Controls
             document.getElementById('btn-restart').onclick = () => this.restartGame();
             document.getElementById('btn-close').onclick = () => this.disbandRoom();
             document.getElementById('btn-leave').onclick = () => location.reload();
