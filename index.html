@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crown Arena v1.1</title>
+    <title>Crown Arena v2.0</title>
     <style>
         body {
             margin: 0;
@@ -133,14 +133,35 @@
             transition: width 0.2s, background-color 0.2s;
         }
 
-        /* --- ULT UI --- */
+        /* Ammo Bar */
+        #ammo-container {
+            position: absolute;
+            bottom: 140px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 5px;
+        }
+        .ammo-slot {
+            width: 30px;
+            height: 10px;
+            background: #333;
+            border: 1px solid #777;
+            transform: skewX(-20deg);
+        }
+        .ammo-active {
+            background: #ff9800;
+            box-shadow: 0 0 5px #ff9800;
+        }
+
+        /* ULT UI */
         #ult-container {
             position: absolute;
             top: 60px;
             right: 10px;
             width: 60px;
             text-align: center;
-            pointer-events: auto; /* ボタン押せるように */
+            pointer-events: auto;
         }
         .ult-gauge-bg {
             width: 100%;
@@ -200,7 +221,7 @@
 
     <div id="layer-menu" class="layer">
         <div class="panel">
-            <h1>Crown Arena v1.1</h1>
+            <h1>Crown Arena v2.0</h1>
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
             <div style="margin: 10px 0; color:#666;">- OR -</div>
             <input type="number" id="input-room" placeholder="4-Digit Room ID">
@@ -248,6 +269,12 @@
             <div class="hp-bar-bg"><div id="bar-hp-p2" class="hp-fill"></div></div>
         </div>
 
+        <div id="ammo-container">
+            <div class="ammo-slot ammo-active" id="ammo-1"></div>
+            <div class="ammo-slot ammo-active" id="ammo-2"></div>
+            <div class="ammo-slot ammo-active" id="ammo-3"></div>
+        </div>
+
         <div id="ult-container">
             <div class="ult-gauge-bg"><div id="bar-ult" class="ult-fill"></div></div>
             <div id="btn-ult">ULT</div>
@@ -259,9 +286,6 @@
     <canvas id="gameCanvas"></canvas>
 
 <script type="module">
-    // ---------------------------------------------------------
-    // 1. Firebase Config & Imports
-    // ---------------------------------------------------------
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { 
         getFirestore, doc, setDoc, updateDoc, onSnapshot, getDoc, deleteDoc, increment 
@@ -280,42 +304,36 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
-    // ---------------------------------------------------------
-    // 2. Constants & Globals
-    // ---------------------------------------------------------
-    const CANVAS = document.getElementById('gameCanvas');
-    const CTX = CANVAS.getContext('2d');
-    
-    // Game Config
+    // --- Config ---
     const PLAYER_RADIUS = 20;
     const BULLET_RADIUS = 6;
     const ULT_RADIUS = 20;
     const MOVE_SPEED = 5;
-    const BULLET_SPEED = 12;
-    const FIRE_RATE = 250; 
+    const BULLET_SPEED = 15; // 弾速アップ
+    const KNOCKBACK_FORCE = 10; // ノックバック距離
+    
+    const AMMO_MAX = 3;
+    const AMMO_RELOAD_TIME = 1500; // 1.5秒
+    const FIRE_RATE = 200; // 連射間隔制限
     const SYNC_INTERVAL = 50; 
     
     const GAME_DURATION = 60; 
     const ULT_MAX = 100;
-    const ULT_CHARGE_PASSIVE = 5; // 毎秒
-    const ULT_CHARGE_HIT = 10;    // 被弾時
+    const ULT_CHARGE_PASSIVE = 5; 
+    const ULT_CHARGE_HIT = 10;
 
-    // ---------------------------------------------------------
-    // 3. Game Logic Class
-    // ---------------------------------------------------------
     class Game {
         constructor() {
             this.roomId = null;
             this.isHost = false; 
-            this.myId = null; // 'p1' or 'p2'
+            this.myId = null; 
             
-            // ゲーム状態
             this.state = {
                 players: {
                     p1: { x: 100, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0 },
                     p2: { x: 300, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0 }
                 },
-                status: "waiting", // waiting, playing, finished
+                status: "waiting",
                 remainingTime: GAME_DURATION,
                 startTime: null,
                 bulletSeq: 0,
@@ -323,28 +341,37 @@
             };
 
             this.localBullets = []; 
-            this.particles = []; // 発射エフェクト用
+            this.particles = [];
+
+            // Local Game State
+            this.myAmmo = AMMO_MAX;
+            this.ammoTimer = 0;
+            this.lastFireTime = 0;
 
             // Input
             this.input = {
-                move: { active: false, x: 0, y: 0, id: null, baseX: 0, baseY: 0 },
-                aim:  { active: false, x: 0, y: 0, id: null, baseX: 0, baseY: 0, angle: 0 },
-                fireTrigger: false // フレームごとの発射フラグ
+                move: { active: false, x: 0, y: 0, id: null, angle: 0 },
+                aim:  { active: false, x: 0, y: 0, id: null, angle: 0 },
             };
             
-            // Timers
+            // Stick Positions (Fixed)
+            this.stickLeftBase = { x: 0, y: 0 };
+            this.stickRightBase = { x: 0, y: 0 };
+            this.stickRadius = 60;
+
             this.lastSyncTime = 0;
             this.lastTimeTick = 0;
             this.lastFrameTime = Date.now();
-            this.lastFireTime = 0;
             this.unsubscribe = null;
             this.isRoomReady = false;
+
+            this.canvas = document.getElementById('gameCanvas');
+            this.ctx = this.canvas.getContext('2d');
 
             this.resize();
             window.addEventListener('resize', () => this.resize());
             this.setupInputs();
             
-            // UI References
             this.layers = {
                 menu: document.getElementById('layer-menu'),
                 wait: document.getElementById('layer-wait'),
@@ -354,29 +381,24 @@
             
             this.bindButtons();
 
-            // Loop
             requestAnimationFrame((t) => this.loop(t));
         }
 
         resize() {
-            CANVAS.width = window.innerWidth;
-            CANVAS.height = window.innerHeight;
-            // 固定スティック位置は使わず、タッチ位置基準のダイナミック方式にするためリサイズ処理は最小限
+            this.canvas.width = window.innerWidth;
+            this.canvas.height = window.innerHeight;
+            // 固定スティック位置：左下と右下
+            this.stickLeftBase = { x: 120, y: this.canvas.height - 120 };
+            this.stickRightBase = { x: this.canvas.width - 120, y: this.canvas.height - 120 };
         }
 
-        // --- Network Actions ---
+        // --- Network ---
 
         async createRoom() {
             this.roomId = Math.floor(1000 + Math.random() * 9000).toString();
             this.isHost = true;
             this.myId = 'p1';
-            
-            // 初期化
-            this.state.players.p1.active = true;
-            this.state.players.p1.x = 100;
-            this.state.players.p1.hp = 100;
-            this.state.players.p1.ult = 0;
-            this.state.players.p1.slowUntil = 0;
+            this.resetLocalState();
 
             const initialData = {
                 players: {
@@ -389,7 +411,7 @@
                 bulletSeq: 0,
                 ultSeq: 0,
                 lastShooter: null,
-                lastAngle: 0 // 追加: 弾の角度
+                lastAngle: 0
             };
 
             try {
@@ -400,7 +422,7 @@
                 document.getElementById('room-id-display').innerText = "Room: " + this.roomId;
                 this.subscribeToRoom();
             } catch (e) {
-                console.error("Create Error:", e);
+                console.error(e);
                 alert("Error creating room.");
             }
         }
@@ -409,24 +431,16 @@
             const docRef = doc(db, "rooms", id);
             try {
                 const snap = await getDoc(docRef);
-                if (!snap.exists()) { 
-                    alert("Room not found!"); 
-                    return; 
-                }
-                const data = snap.data();
-                if (data.status === "closed") {
-                    alert("Room is closed.");
-                    return;
-                }
+                if (!snap.exists()) { alert("Room not found!"); return; }
+                if (snap.data().status === "closed") { alert("Room is closed."); return; }
 
                 this.roomId = id;
                 this.isHost = false;
                 this.myId = 'p2';
+                this.resetLocalState();
 
                 this.state.players.p2.active = true;
-                this.state.players.p2.x = CANVAS.width - 100;
-                this.state.players.p2.hp = 100;
-                this.state.players.p2.ult = 0;
+                this.state.players.p2.x = this.canvas.width - 100;
 
                 await updateDoc(docRef, {
                     "players.p2.active": true,
@@ -438,7 +452,7 @@
                 this.subscribeToRoom();
 
             } catch (e) {
-                console.error("Join Error:", e);
+                console.error(e);
                 alert("Error joining room.");
             }
         }
@@ -448,23 +462,21 @@
             
             this.unsubscribe = onSnapshot(doc(db, "rooms", this.roomId), (docSnap) => {
                 if (!docSnap.exists()) {
-                    console.warn("Snapshot: Document does not exist (ignoring temporary glitch)");
+                    console.warn("Doc missing");
                     return;
                 }
                 const data = docSnap.data();
                 
                 if (data.status === "closed") {
-                    alert("Room was closed by host.");
+                    alert("Room closed.");
                     location.reload();
                     return;
                 }
 
-                // ゲーム開始処理 (Host Only)
-                if (this.isHost && this.state.status === "waiting" && data.players.p2 && data.players.p2.active) {
+                if (this.isHost && this.state.status === "waiting" && data.players.p2?.active) {
                     this.startGameAsHost();
                 }
 
-                // ステータス同期
                 if (data.status === "playing") {
                     this.switchLayer(null); 
                     this.state.status = "playing";
@@ -475,12 +487,9 @@
                     this.showResult(data.winner);
                 }
 
-                // タイマー同期
-                if (data.startTime) {
-                    this.state.startTime = data.startTime;
-                }
+                if (data.startTime) this.state.startTime = data.startTime;
 
-                // 弾丸イベント (角度情報付き)
+                // Bullet Events
                 if (data.bulletSeq > this.state.bulletSeq) {
                     if (data.lastShooter !== this.myId) {
                         this.spawnBulletFromSync(data.lastShooter, false, data.lastAngle);
@@ -494,7 +503,7 @@
                     this.state.ultSeq = data.ultSeq;
                 }
 
-                // プレイヤー情報同期
+                // Player Sync
                 if (this.isHost) {
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
@@ -503,9 +512,7 @@
                         p2.active = data.players.p2.active;
                     }
                 } else {
-                    if (data.players.p1) {
-                        Object.assign(this.state.players.p1, data.players.p1);
-                    }
+                    if (data.players.p1) Object.assign(this.state.players.p1, data.players.p1);
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
                         p2.hp = data.players.p2.hp;
@@ -514,7 +521,6 @@
                         p2.active = data.players.p2.active;
                     }
                 }
-                
                 this.updateUI();
             });
         }
@@ -522,22 +528,21 @@
         async startGameAsHost() {
             const now = Date.now();
             this.state.startTime = now;
-            this.state.status = "playing";
-            
             try {
                 await updateDoc(doc(db, "rooms", this.roomId), {
                     startTime: now,
                     status: "playing"
                 });
-            } catch(e) {
-                console.error("Start Game Error:", e);
-            }
+            } catch(e) {}
         }
 
         async syncToFirestore() {
             if (!this.roomId || this.state.status === "finished") return;
             const ref = doc(db, "rooms", this.roomId);
             const me = this.state.players[this.myId];
+
+            // 安全策：NaNなら送信しない
+            if (isNaN(me.x) || isNaN(me.y)) return;
 
             try {
                 if (this.isHost) {
@@ -548,7 +553,6 @@
                         "players.p1.hp": this.state.players.p1.hp,
                         "players.p1.ult": Math.floor(this.state.players.p1.ult),
                         "players.p1.slowUntil": this.state.players.p1.slowUntil,
-
                         "players.p2.hp": this.state.players.p2.hp,
                         "players.p2.ult": Math.floor(this.state.players.p2.ult),
                         "players.p2.slowUntil": this.state.players.p2.slowUntil
@@ -559,33 +563,54 @@
                         "players.p2.y": me.y
                     });
                 }
-            } catch (e) { /* ignore lag */ }
+            } catch (e) {}
         }
 
-        // --- Bullet Logic ---
+        // --- Logic ---
 
-        // 攻撃スティックリリース時に呼ばれる
-        triggerFire(angle) {
+        resetLocalState() {
+            this.state.players.p1.x = 100;
+            this.state.players.p1.y = 100;
+            this.state.players.p1.hp = 100;
+            this.state.players.p1.ult = 0;
+            this.state.players.p2.x = this.canvas.width - 100;
+            this.state.players.p2.y = 100;
+            this.state.players.p2.hp = 100;
+            this.state.players.p2.ult = 0;
+            this.myAmmo = AMMO_MAX;
+            this.localBullets = [];
+        }
+
+        // 攻撃スティック離した時に呼ばれる
+        tryFire(angle) {
+            if (this.myAmmo <= 0) return; // 弾切れ
             const now = Date.now();
-            // クールダウン
             if (now - this.lastFireTime < FIRE_RATE) return;
-            this.lastFireTime = now;
 
-            // ローカル生成
+            this.lastFireTime = now;
+            this.myAmmo--; 
+
             this.spawnBulletLocal(this.myId, false, angle);
-            
-            // Firestore送信
             this.sendFireEvent(false, angle);
         }
 
+        // ULTオートエイム
         triggerUlt() {
             const me = this.state.players[this.myId];
             if (me.ult < ULT_MAX) return;
 
             me.ult = 0;
-            // エイム中の角度があればそれを使う、なければデフォルト(P1右/P2左)
-            let angle = this.input.aim.active ? this.input.aim.angle : (this.myId === 'p1' ? 0 : Math.PI);
             
+            // オートエイム計算
+            const targetId = (this.myId === 'p1') ? 'p2' : 'p1';
+            const target = this.state.players[targetId];
+            let angle = 0;
+            if (target && target.active) {
+                angle = Math.atan2(target.y - me.y, target.x - me.x);
+            } else {
+                angle = (this.myId === 'p1') ? 0 : Math.PI;
+            }
+
             this.spawnBulletLocal(this.myId, true, angle);
             this.sendFireEvent(true, angle);
         }
@@ -594,17 +619,9 @@
             const ref = doc(db, "rooms", this.roomId);
             try {
                 if (isUlt) {
-                    await updateDoc(ref, { 
-                        ultSeq: increment(1), 
-                        lastShooter: this.myId,
-                        lastAngle: angle
-                    });
+                    await updateDoc(ref, { ultSeq: increment(1), lastShooter: this.myId, lastAngle: angle });
                 } else {
-                    await updateDoc(ref, { 
-                        bulletSeq: increment(1), 
-                        lastShooter: this.myId,
-                        lastAngle: angle
-                    });
+                    await updateDoc(ref, { bulletSeq: increment(1), lastShooter: this.myId, lastAngle: angle });
                 }
             } catch(e) {}
         }
@@ -617,23 +634,31 @@
             const p = this.state.players[ownerId];
             if (!p || !p.active) return;
 
+            // 座標NaNチェック
+            if (isNaN(p.x) || isNaN(p.y)) return;
+
             this.localBullets.push({
                 x: p.x, 
                 y: p.y, 
                 vx: Math.cos(angle) * BULLET_SPEED, 
                 vy: Math.sin(angle) * BULLET_SPEED, 
+                angle: angle,
                 owner: ownerId, 
                 isUlt: isUlt, 
                 r: isUlt ? ULT_RADIUS : BULLET_RADIUS
             });
 
-            // 発射エフェクト
-            this.particles.push({
-                x: p.x + Math.cos(angle) * 30,
-                y: p.y + Math.sin(angle) * 30,
-                life: 10,
-                color: isUlt ? '#d000ff' : '#ffff00'
-            });
+            // エフェクト
+            for(let i=0; i<5; i++){
+                this.particles.push({
+                    x: p.x + Math.cos(angle)*20, 
+                    y: p.y + Math.sin(angle)*20,
+                    vx: (Math.random()-0.5)*5,
+                    vy: (Math.random()-0.5)*5,
+                    life: 10,
+                    color: isUlt ? '#d000ff' : '#ffaa00'
+                });
+            }
         }
 
         // --- Loop ---
@@ -647,13 +672,23 @@
             if (this.state.status === "playing" && this.state.startTime) {
                 const elapsed = (now - this.state.startTime) / 1000;
                 this.state.remainingTime = Math.max(0, GAME_DURATION - elapsed);
-                
                 if (this.isHost && this.state.remainingTime <= 0) {
                     this.checkTimeOver();
                 }
             }
 
             if (this.state.status === "playing") {
+                // Ammo Reload
+                if (this.myAmmo < AMMO_MAX) {
+                    this.ammoTimer += (deltaTimeSec * 1000);
+                    if (this.ammoTimer >= AMMO_RELOAD_TIME) {
+                        this.myAmmo++;
+                        this.ammoTimer = 0;
+                    }
+                } else {
+                    this.ammoTimer = 0;
+                }
+
                 // Host Logic
                 if (this.isHost) {
                     ['p1', 'p2'].forEach(pid => {
@@ -671,17 +706,19 @@
                     let speed = MOVE_SPEED;
                     if (now < me.slowUntil) speed *= 0.5;
 
-                    // 移動スティックの入力反映
                     if (this.input.move.active) {
                         const mx = Math.cos(this.input.move.angle);
                         const my = Math.sin(this.input.move.angle);
-                        // スティックの倒し具合(dist)も考慮できるが今回は正規化方向へ等速移動
                         me.x += mx * speed;
                         me.y += my * speed;
                     }
 
-                    me.x = Math.max(20, Math.min(CANVAS.width - 20, me.x));
-                    me.y = Math.max(20, Math.min(CANVAS.height - 20, me.y));
+                    // NaN Check
+                    if (isNaN(me.x)) me.x = 100;
+                    if (isNaN(me.y)) me.y = 100;
+
+                    me.x = Math.max(20, Math.min(this.canvas.width - 20, me.x));
+                    me.y = Math.max(20, Math.min(this.canvas.height - 20, me.y));
                 }
             }
 
@@ -695,18 +732,15 @@
         }
 
         updateBullets() {
-            // 移動
             this.localBullets.forEach(b => {
                 b.x += b.vx;
                 b.y += b.vy;
             });
 
-            // 削除
             this.localBullets = this.localBullets.filter(b => 
-                b.x > 0 && b.x < CANVAS.width && b.y > 0 && b.y < CANVAS.height
+                b.x > 0 && b.x < this.canvas.width && b.y > 0 && b.y < this.canvas.height
             );
 
-            // 当たり判定
             this.localBullets = this.localBullets.filter(b => {
                 let hit = false;
                 const targetId = b.owner === 'p1' ? 'p2' : 'p1';
@@ -719,15 +753,21 @@
                     if (Math.hypot(dx, dy) < PLAYER_RADIUS + b.r) {
                         hit = true; 
                         
-                        // HP計算 (Hostのみ)
+                        // Host Only Logic
                         if (this.isHost) {
                             const dmg = b.isUlt ? 20 : 10;
                             target.hp -= dmg;
-                            
-                            // ULTチャージ (被弾)
                             target.ult = Math.min(ULT_MAX, target.ult + ULT_CHARGE_HIT);
-
                             if (b.isUlt) target.slowUntil = Date.now() + 3000;
+
+                            // Knockback
+                            const knockDist = KNOCKBACK_FORCE;
+                            target.x += Math.cos(b.angle) * knockDist;
+                            target.y += Math.sin(b.angle) * knockDist;
+                            
+                            // Bounds check for target
+                            target.x = Math.max(20, Math.min(this.canvas.width - 20, target.x));
+                            target.y = Math.max(20, Math.min(this.canvas.height - 20, target.y));
 
                             if (target.hp <= 0) {
                                 target.hp = 0;
@@ -741,16 +781,11 @@
         }
 
         updateParticles() {
-            this.localBullets.forEach(b => {
-                // 弾の軌跡用パーティクル（簡易）
-                if (Math.random() < 0.3) {
-                    this.particles.push({
-                        x: b.x, y: b.y, life: 5, color: b.isUlt ? '#d000ff' : '#ffff00', size: 2
-                    });
-                }
+            this.particles.forEach(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life--;
             });
-
-            this.particles.forEach(p => p.life--);
             this.particles = this.particles.filter(p => p.life > 0);
         }
 
@@ -787,36 +822,42 @@
         }
 
         updateUI() {
+            // Timer
             const timerEl = document.getElementById('timer-container');
             if (timerEl) {
                 timerEl.innerText = Math.max(0, Math.ceil(this.state.remainingTime));
             }
 
+            // HP
             const p1 = this.state.players.p1;
             const p2 = this.state.players.p2;
-            
             const barP1 = document.getElementById('bar-hp-p1');
             if (barP1) {
                 barP1.style.width = Math.max(0, p1.hp) + "%";
                 barP1.style.backgroundColor = p1.hp > 30 ? '#0f0' : '#f00';
             }
-
             const barP2 = document.getElementById('bar-hp-p2');
             if (barP2) {
                 barP2.style.width = Math.max(0, p2.hp) + "%";
                 barP2.style.backgroundColor = p2.hp > 30 ? '#0f0' : '#f00';
             }
 
+            // ULT
             const myUlt = this.state.players[this.myId]?.ult || 0;
             const barUlt = document.getElementById('bar-ult');
-            if (barUlt) {
-                barUlt.style.width = Math.min(100, Math.max(0, myUlt)) + "%";
-            }
+            if (barUlt) barUlt.style.width = Math.min(100, Math.max(0, myUlt)) + "%";
             
             const btnUlt = document.getElementById('btn-ult');
             if (btnUlt) {
                 if (myUlt >= ULT_MAX) btnUlt.classList.add('ready');
                 else btnUlt.classList.remove('ready');
+            }
+
+            // Ammo
+            for(let i=1; i<=3; i++) {
+                const el = document.getElementById('ammo-'+i);
+                if(i <= this.myAmmo) el.classList.add('ammo-active');
+                else el.classList.remove('ammo-active');
             }
         }
 
@@ -853,27 +894,18 @@
 
         async restartGame() {
             if (!this.isHost) return;
-            
             const now = Date.now();
-            this.state.players.p1.hp = 100;
-            this.state.players.p1.x = 100;
-            this.state.players.p1.ult = 0;
-            this.state.players.p1.slowUntil = 0;
-            this.state.players.p2.hp = 100;
-            this.state.players.p2.x = CANVAS.width - 100;
-            this.state.players.p2.ult = 0;
-            this.state.players.p2.slowUntil = 0;
+            this.resetLocalState();
             this.state.remainingTime = GAME_DURATION;
             this.state.startTime = now;
             this.state.status = "playing";
-            this.localBullets = []; 
 
             await updateDoc(doc(db, "rooms", this.roomId), {
                 "players.p1.hp": 100,
                 "players.p1.x": 100,
                 "players.p1.ult": 0,
                 "players.p2.hp": 100,
-                "players.p2.x": CANVAS.width - 100,
+                "players.p2.x": this.canvas.width - 100,
                 "players.p2.ult": 0,
                 "status": "playing",
                 "remainingTime": GAME_DURATION,
@@ -887,91 +919,116 @@
             try {
                 await updateDoc(doc(db, "rooms", this.roomId), { status: "closed" });
                 location.reload();
-            } catch (e) { console.error("Disband Error:", e); }
+            } catch (e) {}
         }
 
+        // --- Draw ---
+
         draw() {
-            CTX.fillStyle = '#222';
-            CTX.fillRect(0, 0, CANVAS.width, CANVAS.height);
+            this.ctx.fillStyle = '#222';
+            this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+
+            // Stick Bases (Fixed)
+            this.drawStickBase(this.stickLeftBase);
+            this.drawStickBase(this.stickRightBase);
+
+            // Stick Inputs
+            if (this.input.move.active) {
+                this.drawStickKnob(this.stickLeftBase, this.input.move.angle);
+            } else {
+                this.drawStickKnobCentered(this.stickLeftBase);
+            }
+
+            if (this.input.aim.active) {
+                this.drawStickKnob(this.stickRightBase, this.input.aim.angle);
+                // Aim Line
+                this.ctx.beginPath();
+                this.ctx.moveTo(this.stickRightBase.x, this.stickRightBase.y);
+                this.ctx.lineTo(
+                    this.stickRightBase.x + Math.cos(this.input.aim.angle) * 200, 
+                    this.stickRightBase.y + Math.sin(this.input.aim.angle) * 200
+                );
+                this.ctx.strokeStyle = 'rgba(255,0,0,0.3)';
+                this.ctx.lineWidth = 2;
+                this.ctx.setLineDash([5, 5]);
+                this.ctx.stroke();
+                this.ctx.setLineDash([]);
+            } else {
+                this.drawStickKnobCentered(this.stickRightBase);
+            }
 
             // Players
             ['p1', 'p2'].forEach(pid => {
                 const p = this.state.players[pid];
                 if (!p.active) return;
                 
-                CTX.beginPath();
-                CTX.arc(p.x, p.y, PLAYER_RADIUS, 0, Math.PI*2);
-                CTX.fillStyle = pid === 'p1' ? '#00ccff' : '#00ff00';
-                CTX.fill();
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, PLAYER_RADIUS, 0, Math.PI*2);
+                this.ctx.fillStyle = pid === 'p1' ? '#00ccff' : '#00ff00';
+                this.ctx.fill();
                 
                 if (Date.now() < p.slowUntil) {
-                    CTX.strokeStyle = '#00ffff';
-                    CTX.lineWidth = 3;
-                    CTX.stroke();
+                    this.ctx.strokeStyle = '#00ffff';
+                    this.ctx.lineWidth = 3;
+                    this.ctx.stroke();
                 } else {
-                    CTX.strokeStyle = 'white';
-                    CTX.lineWidth = 2;
-                    CTX.stroke();
+                    this.ctx.strokeStyle = 'white';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.stroke();
                 }
-            });
-
-            // Particles
-            this.particles.forEach(p => {
-                CTX.beginPath();
-                CTX.arc(p.x, p.y, p.size || 3, 0, Math.PI*2);
-                CTX.fillStyle = p.color;
-                CTX.fill();
             });
 
             // Bullets
             this.localBullets.forEach(b => {
-                CTX.beginPath();
-                CTX.arc(b.x, b.y, b.r, 0, Math.PI*2);
+                this.ctx.beginPath();
+                this.ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
                 if (b.isUlt) {
-                    CTX.fillStyle = '#d000ff';
-                    CTX.shadowBlur = 10;
-                    CTX.shadowColor = '#d000ff';
+                    this.ctx.fillStyle = '#d000ff';
+                    this.ctx.shadowBlur = 10;
+                    this.ctx.shadowColor = '#d000ff';
                 } else {
-                    CTX.fillStyle = '#ffeb3b';
-                    CTX.shadowBlur = 0;
+                    this.ctx.fillStyle = '#ffeb3b';
+                    this.ctx.shadowBlur = 0;
                 }
-                CTX.fill();
-                CTX.shadowBlur = 0;
+                this.ctx.fill();
+                this.ctx.shadowBlur = 0;
             });
 
-            // Virtual Sticks
-            // Move Stick (Left)
-            if (this.input.move.active) {
-                this.drawStick(this.input.move.baseX, this.input.move.baseY, this.input.move.x, this.input.move.y);
-            }
-
-            // Aim Stick (Right)
-            if (this.input.aim.active) {
-                this.drawStick(this.input.aim.baseX, this.input.aim.baseY, this.input.aim.x, this.input.aim.y, true);
-                
-                // エイムライン
-                CTX.beginPath();
-                CTX.moveTo(this.input.aim.baseX, this.input.aim.baseY);
-                CTX.lineTo(
-                    this.input.aim.baseX + Math.cos(this.input.aim.angle) * 100, 
-                    this.input.aim.baseY + Math.sin(this.input.aim.angle) * 100
-                );
-                CTX.strokeStyle = 'rgba(255, 0, 0, 0.5)';
-                CTX.lineWidth = 2;
-                CTX.stroke();
-            }
+            // Particles
+            this.particles.forEach(p => {
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, p.size || 2, 0, Math.PI*2);
+                this.ctx.fillStyle = p.color;
+                this.ctx.fill();
+            });
         }
 
-        drawStick(baseX, baseY, inputX, inputY, isAim = false) {
-            CTX.beginPath();
-            CTX.arc(baseX, baseY, 50, 0, Math.PI*2);
-            CTX.strokeStyle = 'rgba(255,255,255,0.3)';
-            CTX.lineWidth = 2;
-            CTX.stroke();
-            CTX.beginPath();
-            CTX.arc(baseX + inputX*50, baseY + inputY*50, 25, 0, Math.PI*2);
-            CTX.fillStyle = isAim ? 'rgba(255,50,50,0.5)' : 'rgba(255,255,255,0.5)';
-            CTX.fill();
+        drawStickBase(pos) {
+            this.ctx.beginPath();
+            this.ctx.arc(pos.x, pos.y, this.stickRadius, 0, Math.PI*2);
+            this.ctx.fillStyle = 'rgba(255,255,255,0.1)';
+            this.ctx.fill();
+            this.ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+            this.ctx.lineWidth = 2;
+            this.ctx.stroke();
+        }
+
+        drawStickKnob(base, angle) {
+            this.ctx.beginPath();
+            this.ctx.arc(
+                base.x + Math.cos(angle) * 40,
+                base.y + Math.sin(angle) * 40,
+                20, 0, Math.PI*2
+            );
+            this.ctx.fillStyle = 'rgba(255,255,255,0.5)';
+            this.ctx.fill();
+        }
+
+        drawStickKnobCentered(base) {
+            this.ctx.beginPath();
+            this.ctx.arc(base.x, base.y, 20, 0, Math.PI*2);
+            this.ctx.fillStyle = 'rgba(255,255,255,0.3)';
+            this.ctx.fill();
         }
 
         loop(timestamp) {
@@ -1006,61 +1063,39 @@
                     const x = t.clientX;
                     const y = t.clientY;
 
-                    // Left side: Move Stick
-                    if (x < CANVAS.width / 2) {
-                        if (!this.input.move.active) {
-                            this.input.move.active = true;
-                            this.input.move.id = t.identifier;
-                            this.input.move.baseX = x;
-                            this.input.move.baseY = y;
-                            this.input.move.x = 0;
-                            this.input.move.y = 0;
-                        } else if (this.input.move.id === t.identifier) {
-                            const dx = x - this.input.move.baseX;
-                            const dy = y - this.input.move.baseY;
-                            const dist = Math.hypot(dx, dy);
-                            const max = 50;
-                            const angle = Math.atan2(dy, dx);
-                            if (dist > max) {
-                                this.input.move.x = Math.cos(angle);
-                                this.input.move.y = Math.sin(angle);
-                            } else {
-                                this.input.move.x = dx / max;
-                                this.input.move.y = dy / max;
-                            }
-                            this.input.move.angle = angle;
-                        }
-                    } 
-                    // Right side: Aim Stick
-                    else {
-                        // ULTボタンエリア除外
-                        const ultRect = document.getElementById('btn-ult').getBoundingClientRect();
-                        if (x >= ultRect.left && x <= ultRect.right && y >= ultRect.top && y <= ultRect.bottom) {
-                            continue;
-                        }
+                    // Left Stick Check
+                    const distLeft = Math.hypot(x - this.stickLeftBase.x, y - this.stickLeftBase.y);
+                    if (distLeft < 100) {
+                        this.input.move.active = true;
+                        this.input.move.id = t.identifier;
+                        this.input.move.angle = Math.atan2(y - this.stickLeftBase.y, x - this.stickLeftBase.x);
+                        continue;
+                    }
 
-                        if (!this.input.aim.active) {
-                            this.input.aim.active = true;
-                            this.input.aim.id = t.identifier;
-                            this.input.aim.baseX = x;
-                            this.input.aim.baseY = y;
-                            this.input.aim.x = 0;
-                            this.input.aim.y = 0;
-                        } else if (this.input.aim.id === t.identifier) {
-                            const dx = x - this.input.aim.baseX;
-                            const dy = y - this.input.aim.baseY;
-                            const dist = Math.hypot(dx, dy);
-                            const max = 50;
-                            const angle = Math.atan2(dy, dx);
-                            if (dist > max) {
-                                this.input.aim.x = Math.cos(angle);
-                                this.input.aim.y = Math.sin(angle);
-                            } else {
-                                this.input.aim.x = dx / max;
-                                this.input.aim.y = dy / max;
-                            }
-                            this.input.aim.angle = angle;
-                        }
+                    // Right Stick Check
+                    const distRight = Math.hypot(x - this.stickRightBase.x, y - this.stickRightBase.y);
+                    if (distRight < 100) {
+                        this.input.aim.active = true;
+                        this.input.aim.id = t.identifier;
+                        this.input.aim.angle = Math.atan2(y - this.stickRightBase.y, x - this.stickRightBase.x);
+                        continue;
+                    }
+                }
+            };
+
+            const handleMove = (e) => {
+                e.preventDefault();
+                const touches = e.changedTouches;
+                for (let i = 0; i < touches.length; i++) {
+                    const t = touches[i];
+                    const x = t.clientX;
+                    const y = t.clientY;
+
+                    if (this.input.move.active && this.input.move.id === t.identifier) {
+                        this.input.move.angle = Math.atan2(y - this.stickLeftBase.y, x - this.stickLeftBase.x);
+                    }
+                    if (this.input.aim.active && this.input.aim.id === t.identifier) {
+                        this.input.aim.angle = Math.atan2(y - this.stickRightBase.y, x - this.stickRightBase.x);
                     }
                 }
             };
@@ -1073,23 +1108,19 @@
                     if (this.input.move.id === t.identifier) {
                         this.input.move.active = false;
                         this.input.move.id = null;
-                        this.input.move.x = 0;
-                        this.input.move.y = 0;
                     }
                     if (this.input.aim.id === t.identifier) {
-                        // Fire on release
-                        this.triggerFire(this.input.aim.angle);
+                        // Fire!
+                        this.tryFire(this.input.aim.angle);
                         this.input.aim.active = false;
                         this.input.aim.id = null;
-                        this.input.aim.x = 0;
-                        this.input.aim.y = 0;
                     }
                 }
             };
 
-            CANVAS.addEventListener('touchstart', handleTouch, {passive: false});
-            CANVAS.addEventListener('touchmove', handleTouch, {passive: false});
-            CANVAS.addEventListener('touchend', handleEnd, {passive: false});
+            this.canvas.addEventListener('touchstart', handleTouch, {passive: false});
+            this.canvas.addEventListener('touchmove', handleMove, {passive: false});
+            this.canvas.addEventListener('touchend', handleEnd, {passive: false});
         }
     }
 
