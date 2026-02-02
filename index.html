@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crown Arena v3.1 (Smooth)</title>
+    <title>Crown Arena v3.2 (Fixed Sync)</title>
     <style>
         body {
             margin: 0;
@@ -233,7 +233,7 @@
 
     <div id="layer-menu" class="layer">
         <div class="panel">
-            <h1>Crown Arena v3.1</h1>
+            <h1>Crown Arena v3.2</h1>
             <input type="text" id="input-name" placeholder="Your Name" style="margin-bottom: 15px;">
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
             <div style="margin: 10px 0; color:#666;">- OR -</div>
@@ -355,7 +355,6 @@
             this.myAmmo = AMMO_MAX;
             this.ammoTimer = 0;
             this.lastFireTime = 0;
-            this.ultLocked = false;
 
             this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -474,7 +473,6 @@
 
             this.myAmmo = AMMO_MAX;
             this.localBullets = [];
-            this.ultLocked = false;
             this.connected = false;
         }
 
@@ -604,7 +602,6 @@
                     this.state.remainingTime = msg.time;
                     this.state.status = msg.status;
                     
-                    // Sync P1 (Opponent if I am Guest)
                     const remoteP1 = msg.p1;
                     const localP1 = this.state.players.p1;
                     localP1.targetX = remoteP1.x;
@@ -615,8 +612,18 @@
                     localP1.active = remoteP1.active;
                     localP1.name = remoteP1.name;
 
-                    // Sync P2 (Me if I am Guest)
-                    Object.assign(this.state.players.p2, msg.p2);
+                    const remoteP2 = msg.p2;
+                    const localP2 = this.state.players.p2;
+                    localP2.targetX = remoteP2.x;
+                    localP2.targetY = remoteP2.y;
+                    localP2.hp = remoteP2.hp;
+                    localP2.ult = remoteP2.ult;
+                    localP2.slowUntil = remoteP2.slowUntil;
+                    localP2.active = remoteP2.active;
+                    // name P2 is local if I am P2, so careful not to overwrite local name if possible
+                    // But here we just trust host sync for P2 stats mostly. 
+                    // However, we must NOT overwrite local P2 coordinate if I am P2.
+                    // The sync logic for coords is handled in update() interpolation.
 
                     if (msg.status === 'playing') {
                         this.switchLayer(null);
@@ -629,6 +636,7 @@
                     break;
 
                 case 'input': 
+                    // Guest to Host
                     const p2 = this.state.players.p2;
                     p2.targetX = msg.x;
                     p2.targetY = msg.y;
@@ -641,6 +649,18 @@
                     }
                     break;
                 
+                case 'ultRequest':
+                    if (this.isHost) {
+                        const p2 = this.state.players.p2;
+                        if (p2.ult >= ULT_MAX) {
+                            p2.ult = 0;
+                            const angle = msg.angle;
+                            this.spawnBulletLocal('p2', true, angle);
+                            this.sendMessage({ type: 'shoot', shooter: 'p2', isUlt: true, angle: angle });
+                        }
+                    }
+                    break;
+
                 case 'restart':
                     this.resetLocalState();
                     if(this.isHost) this.startGameAsHost();
@@ -674,13 +694,9 @@
         }
 
         triggerUlt() {
-            if (this.ultLocked) return;
             const me = this.state.players[this.myId];
             if (me.ult < ULT_MAX) return;
 
-            this.ultLocked = true;
-            me.ult = 0; 
-            
             const targetId = (this.myId === 'p1') ? 'p2' : 'p1';
             const target = this.state.players[targetId];
             let angle = 0;
@@ -690,10 +706,14 @@
                 angle = (this.myId === 'p1') ? 0 : Math.PI;
             }
 
-            this.spawnBulletLocal(this.myId, true, angle);
-            this.sendMessage({ type: 'shoot', shooter: this.myId, isUlt: true, angle: angle });
-
-            setTimeout(() => { this.ultLocked = false; }, 500);
+            if (this.isHost) {
+                me.ult = 0;
+                this.spawnBulletLocal(this.myId, true, angle);
+                this.sendMessage({ type: 'shoot', shooter: this.myId, isUlt: true, angle: angle });
+            } else {
+                // Request Host
+                this.sendMessage({ type: 'ultRequest', angle: angle });
+            }
         }
 
         spawnBulletLocal(ownerId, isUlt, angle) {
@@ -1025,6 +1045,8 @@
 
             if (this.input.aim.active) {
                 this.drawStickKnob(this.stickRightBase, this.input.aim.angle);
+                
+                // Trajectory Line
                 const me = this.state.players[this.myId];
                 if (me && me.active) {
                     this.ctx.beginPath();
