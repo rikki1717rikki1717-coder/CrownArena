@@ -308,25 +308,34 @@
     <canvas id="gameCanvas"></canvas>
 
 <script type="module">
+    // ---------------------------------------------------------
+    // 1. Firebase Config & Imports
+    // ---------------------------------------------------------
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { 
         getFirestore, doc, setDoc, updateDoc, onSnapshot, getDoc, deleteDoc, increment 
     } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
     const firebaseConfig = {
-        apiKey: "AIzaSyA8B-JtwDskK3omhjUCbjERHBZ6UDdm854",
-        authDomain: "crownarena-1a321.firebaseapp.com",
-        projectId: "crownarena-1a321",
-        storageBucket: "crownarena-1a321.firebasestorage.app",
-        messagingSenderId: "103440875843",
-        appId: "1:103440875843:web:d34b314c4df7e0d491aff6",
-        measurementId: "G-N9KDL9B9Y5"
+      apiKey: "AIzaSyBzGSyYfheQBTBw4Vn86_4GI-0qlbSkcvA",
+      authDomain: "newcrownarena.firebaseapp.com",
+      projectId: "newcrownarena",
+      storageBucket: "newcrownarena.firebasestorage.app",
+      messagingSenderId: "712230222388",
+      appId: "1:712230222388:web:8ebf1e69e83f69b1fce861",
+      measurementId: "G-5H9W0M8Z0N"
     };
 
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
-    // --- Config ---
+    // ---------------------------------------------------------
+    // 2. Constants & Globals
+    // ---------------------------------------------------------
+    const CANVAS = document.getElementById('gameCanvas');
+    const CTX = CANVAS.getContext('2d');
+    
+    // Game Config
     const PLAYER_RADIUS = 20;
     const BULLET_RADIUS = 6;
     const ULT_RADIUS = 20;
@@ -341,28 +350,32 @@
     
     const GAME_DURATION = 60; 
     const ULT_MAX = 100;
-    const ULT_CHARGE_PASSIVE = 5; 
-    const ULT_CHARGE_HIT = 10;
+    const ULT_CHARGE_PASSIVE = 5; // 毎秒
+    const ULT_CHARGE_HIT = 10;    // 被弾時
 
+    // ---------------------------------------------------------
+    // 3. Game Logic Class
+    // ---------------------------------------------------------
     class Game {
         constructor() {
             this.roomId = null;
             this.isHost = false; 
-            this.myId = null; 
+            this.myId = null; // 'p1' or 'p2'
             
+            // ゲーム状態
             this.state = {
                 players: {
                     p1: { x: 100, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0, name: "Blue" },
                     p2: { x: 300, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0, name: "Green" }
                 },
-                status: "waiting",
+                status: "waiting", // waiting, playing, finished
                 remainingTime: GAME_DURATION,
                 startTime: null,
                 bulletSeq: 0,
                 ultSeq: 0
             };
 
-            this.localBullets = []; 
+            this.localBullets = []; // Client Prediction用
             this.particles = [];
 
             // Local Game State
@@ -385,19 +398,18 @@
             this.stickRightBase = { x: 0, y: 0 };
             this.stickRadius = 60;
 
+            // Timers
             this.lastSyncTime = 0;
             this.lastTimeTick = 0;
             this.lastFrameTime = Date.now();
             this.unsubscribe = null;
             this.isRoomReady = false;
 
-            this.canvas = document.getElementById('gameCanvas');
-            this.ctx = this.canvas.getContext('2d');
-
             this.resize();
             window.addEventListener('resize', () => this.resize());
             this.setupInputs();
             
+            // UI References
             this.layers = {
                 menu: document.getElementById('layer-menu'),
                 wait: document.getElementById('layer-wait'),
@@ -407,12 +419,13 @@
             
             this.bindButtons();
 
+            // Loop
             requestAnimationFrame((t) => this.loop(t));
         }
 
         resize() {
-            this.canvas.width = window.innerWidth;
-            this.canvas.height = window.innerHeight;
+            CANVAS.width = window.innerWidth;
+            CANVAS.height = window.innerHeight;
             this.stickLeftBase = { x: 120, y: this.canvas.height - 120 };
             this.stickRightBase = { x: this.canvas.width - 120, y: this.canvas.height - 120 };
         }
@@ -469,9 +482,10 @@
             osc.stop(this.audioCtx.currentTime + 0.1);
         }
 
-        // --- Network ---
+        // --- Network Actions ---
 
         resetLocalState() {
+            // ホスト・ゲスト共通の初期化
             this.state.players.p1.x = 100;
             this.state.players.p1.y = 100;
             this.state.players.p1.hp = 100;
@@ -594,6 +608,7 @@
 
                 if (data.startTime) this.state.startTime = data.startTime;
 
+                // Bullet Events
                 if (data.bulletSeq > this.state.bulletSeq) {
                     if (data.lastShooter !== this.myId) {
                         this.spawnBulletFromSync(data.lastShooter, false, data.lastAngle);
@@ -607,6 +622,7 @@
                     this.state.ultSeq = data.ultSeq;
                 }
 
+                // Player Sync
                 if (this.isHost) {
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
@@ -673,7 +689,7 @@
         // --- Logic ---
 
         tryFire(angle) {
-            if (this.myAmmo <= 0) return;
+            if (this.myAmmo <= 0) return; // 弾切れ
             const now = Date.now();
             if (now - this.lastFireTime < FIRE_RATE) return;
 
@@ -692,6 +708,7 @@
             this.ultLocked = true;
             me.ult = 0; // Local immediate update
             
+            // オートエイム計算
             const targetId = (this.myId === 'p1') ? 'p2' : 'p1';
             const target = this.state.players[targetId];
             let angle = 0;
@@ -716,7 +733,7 @@
                         ultSeq: increment(1), 
                         lastShooter: this.myId, 
                         lastAngle: angle,
-                        [`players.${this.myId}.ult`]: 0
+                        [`players.${this.myId}.ult`]: 0 // Reset Firestore ULT
                     });
                 } else {
                     await updateDoc(ref, { bulletSeq: increment(1), lastShooter: this.myId, lastAngle: angle });
@@ -757,7 +774,6 @@
                 });
             }
 
-            // Sound
             if (isUlt) this.playUltSound();
             else this.playShootSound();
         }
@@ -769,6 +785,7 @@
             const deltaTimeSec = (now - this.lastFrameTime) / 1000;
             this.lastFrameTime = now;
 
+            // Timer
             if (this.state.status === "playing" && this.state.startTime) {
                 const elapsed = (now - this.state.startTime) / 1000;
                 this.state.remainingTime = Math.max(0, GAME_DURATION - elapsed);
@@ -778,7 +795,7 @@
             }
 
             if (this.state.status === "playing") {
-                // Reload
+                // Ammo Reload
                 if (this.myAmmo < AMMO_MAX) {
                     this.ammoTimer += (deltaTimeSec * 1000);
                     if (this.ammoTimer >= AMMO_RELOAD_TIME) {
@@ -789,6 +806,7 @@
                     this.ammoTimer = 0;
                 }
 
+                // Host Logic
                 if (this.isHost) {
                     ['p1', 'p2'].forEach(pid => {
                         const p = this.state.players[pid];
@@ -799,6 +817,7 @@
                     });
                 }
 
+                // Movement
                 const me = this.state.players[this.myId];
                 if (me) {
                     let speed = MOVE_SPEED;
@@ -851,15 +870,18 @@
                         hit = true; 
                         this.playHitSound();
                         
+                        // Host Only Logic
                         if (this.isHost) {
                             const dmg = b.isUlt ? 20 : 10;
                             target.hp -= dmg;
                             target.ult = Math.min(ULT_MAX, target.ult + ULT_CHARGE_HIT);
                             if (b.isUlt) target.slowUntil = Date.now() + 3000;
 
+                            // Knockback
                             const knockDist = KNOCKBACK_FORCE;
                             target.x += Math.cos(b.angle) * knockDist;
                             target.y += Math.sin(b.angle) * knockDist;
+                            
                             target.x = Math.max(20, Math.min(this.canvas.width - 20, target.x));
                             target.y = Math.max(20, Math.min(this.canvas.height - 20, target.y));
 
@@ -954,7 +976,6 @@
                 else el.classList.remove('ammo-active');
             }
 
-            // Reload Bar
             const reloadBar = document.getElementById('reload-bar-fill');
             if (this.myAmmo < AMMO_MAX) {
                 const pct = (this.ammoTimer / AMMO_RELOAD_TIME) * 100;
@@ -1042,7 +1063,7 @@
             if (this.input.aim.active) {
                 this.drawStickKnob(this.stickRightBase, this.input.aim.angle);
                 
-                // Trajectory Line (My Player Only)
+                // Trajectory Line
                 const me = this.state.players[this.myId];
                 if (me && me.active) {
                     this.ctx.beginPath();
@@ -1174,7 +1195,7 @@
                     const x = t.clientX;
                     const y = t.clientY;
 
-                    // Left Stick
+                    // Left side: Move Stick
                     const distLeft = Math.hypot(x - this.stickLeftBase.x, y - this.stickLeftBase.y);
                     if (distLeft < 100) {
                         this.input.move.active = true;
@@ -1183,7 +1204,8 @@
                         continue;
                     }
 
-                    // Right Stick
+                    // Right side: Aim Stick
+                    // ULTボタンエリア除外
                     const ultRect = document.getElementById('btn-ult').getBoundingClientRect();
                     if (x >= ultRect.left && x <= ultRect.right && y >= ultRect.top && y <= ultRect.bottom) {
                         continue;
@@ -1226,6 +1248,7 @@
                         this.input.move.id = null;
                     }
                     if (this.input.aim.id === t.identifier) {
+                        // Fire on release
                         this.tryFire(this.input.aim.angle);
                         this.input.aim.active = false;
                         this.input.aim.id = null;
