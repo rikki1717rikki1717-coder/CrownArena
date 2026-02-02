@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crown Arena v3.2 (Fixed Sync)</title>
+    <title>Crown Arena v3.3 (Walls)</title>
     <style>
         body {
             margin: 0;
@@ -233,7 +233,7 @@
 
     <div id="layer-menu" class="layer">
         <div class="panel">
-            <h1>Crown Arena v3.2</h1>
+            <h1>Crown Arena v3.3</h1>
             <input type="text" id="input-name" placeholder="Your Name" style="margin-bottom: 15px;">
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
             <div style="margin: 10px 0; color:#666;">- OR -</div>
@@ -352,9 +352,11 @@
 
             this.localBullets = []; 
             this.particles = [];
+            this.walls = []; // 壁配列
             this.myAmmo = AMMO_MAX;
             this.ammoTimer = 0;
             this.lastFireTime = 0;
+            this.ultLocked = false;
 
             this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -393,14 +395,19 @@
         }
 
         resize() {
-            if (!this.canvas) {
-                console.error("Canvas not found");
-                return;
-            }
+            if (!this.canvas) return;
             this.canvas.width = window.innerWidth;
             this.canvas.height = window.innerHeight;
             this.stickLeftBase = { x: 120, y: this.canvas.height - 120 };
             this.stickRightBase = { x: this.canvas.width - 120, y: this.canvas.height - 120 };
+            
+            // 壁の再配置 (中央に横長の壁2つ)
+            const w = this.canvas.width;
+            const h = this.canvas.height;
+            this.walls = [
+                { x: w * 0.25, y: h * 0.35, w: w * 0.5, h: 40 },
+                { x: w * 0.25, y: h * 0.65, w: w * 0.5, h: 40 }
+            ];
         }
 
         initAudio() {
@@ -454,6 +461,22 @@
             osc.stop(this.audioCtx.currentTime + 0.1);
         }
 
+        // --- Collision Helper ---
+        checkCircleRect(cx, cy, r, rect) {
+            const closestX = Math.max(rect.x, Math.min(cx, rect.x + rect.w));
+            const closestY = Math.max(rect.y, Math.min(cy, rect.y + rect.h));
+            const distanceX = cx - closestX;
+            const distanceY = cy - closestY;
+            return (distanceX * distanceX) + (distanceY * distanceY) < (r * r);
+        }
+
+        checkWallCollision(x, y, r) {
+            for (let wall of this.walls) {
+                if (this.checkCircleRect(x, y, r, wall)) return true;
+            }
+            return false;
+        }
+
         resetLocalState() {
             this.state.players.p1.x = 100;
             this.state.players.p1.y = 100;
@@ -473,6 +496,7 @@
 
             this.myAmmo = AMMO_MAX;
             this.localBullets = [];
+            this.ultLocked = false;
             this.connected = false;
         }
 
@@ -620,10 +644,6 @@
                     localP2.ult = remoteP2.ult;
                     localP2.slowUntil = remoteP2.slowUntil;
                     localP2.active = remoteP2.active;
-                    // name P2 is local if I am P2, so careful not to overwrite local name if possible
-                    // But here we just trust host sync for P2 stats mostly. 
-                    // However, we must NOT overwrite local P2 coordinate if I am P2.
-                    // The sync logic for coords is handled in update() interpolation.
 
                     if (msg.status === 'playing') {
                         this.switchLayer(null);
@@ -636,7 +656,6 @@
                     break;
 
                 case 'input': 
-                    // Guest to Host
                     const p2 = this.state.players.p2;
                     p2.targetX = msg.x;
                     p2.targetY = msg.y;
@@ -694,6 +713,7 @@
         }
 
         triggerUlt() {
+            if (this.ultLocked) return;
             const me = this.state.players[this.myId];
             if (me.ult < ULT_MAX) return;
 
@@ -711,8 +731,9 @@
                 this.spawnBulletLocal(this.myId, true, angle);
                 this.sendMessage({ type: 'shoot', shooter: this.myId, isUlt: true, angle: angle });
             } else {
-                // Request Host
+                this.ultLocked = true;
                 this.sendMessage({ type: 'ultRequest', angle: angle });
+                setTimeout(() => { this.ultLocked = false; }, 500);
             }
         }
 
@@ -789,8 +810,17 @@
                     if (this.input.move.active) {
                         const mx = Math.cos(this.input.move.angle);
                         const my = Math.sin(this.input.move.angle);
-                        me.x += mx * speed;
-                        me.y += my * speed;
+                        
+                        // 壁判定 (X軸)
+                        const nextX = me.x + mx * speed;
+                        if (!this.checkWallCollision(nextX, me.y, PLAYER_RADIUS)) {
+                            me.x = nextX;
+                        }
+                        // 壁判定 (Y軸)
+                        const nextY = me.y + my * speed;
+                        if (!this.checkWallCollision(me.x, nextY, PLAYER_RADIUS)) {
+                            me.y = nextY;
+                        }
                     }
 
                     if (isNaN(me.x)) me.x = 100;
@@ -800,7 +830,6 @@
                     me.y = Math.max(20, Math.min(this.canvas.height - 20, me.y));
                 }
 
-                // Interpolation for opponent
                 ['p1', 'p2'].forEach(pid => {
                     if (pid !== this.myId) {
                         const p = this.state.players[pid];
@@ -843,9 +872,13 @@
                 b.y += b.vy;
             });
 
-            this.localBullets = this.localBullets.filter(b => 
-                b.x > 0 && b.x < this.canvas.width && b.y > 0 && b.y < this.canvas.height
-            );
+            this.localBullets = this.localBullets.filter(b => {
+                // 画面外判定
+                if (b.x < 0 || b.x > this.canvas.width || b.y < 0 || b.y > this.canvas.height) return false;
+                // 壁判定
+                if (this.checkWallCollision(b.x, b.y, b.r)) return false;
+                return true;
+            });
 
             this.localBullets = this.localBullets.filter(b => {
                 let hit = false;
@@ -870,6 +903,12 @@
                             target.x += Math.cos(b.angle) * knockDist;
                             target.y += Math.sin(b.angle) * knockDist;
                             
+                            // 壁めり込み防止
+                            if (this.checkWallCollision(target.x, target.y, PLAYER_RADIUS)) {
+                                target.x -= Math.cos(b.angle) * knockDist;
+                                target.y -= Math.sin(b.angle) * knockDist;
+                            }
+
                             target.x = Math.max(20, Math.min(this.canvas.width - 20, target.x));
                             target.y = Math.max(20, Math.min(this.canvas.height - 20, target.y));
 
@@ -1034,6 +1073,12 @@
             this.ctx.fillStyle = '#222';
             this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
+            // Walls
+            this.ctx.fillStyle = '#777';
+            this.walls.forEach(w => {
+                this.ctx.fillRect(w.x, w.y, w.w, w.h);
+            });
+
             this.drawStickBase(this.stickLeftBase);
             this.drawStickBase(this.stickRightBase);
 
@@ -1046,7 +1091,6 @@
             if (this.input.aim.active) {
                 this.drawStickKnob(this.stickRightBase, this.input.aim.angle);
                 
-                // Trajectory Line
                 const me = this.state.players[this.myId];
                 if (me && me.active) {
                     this.ctx.beginPath();
