@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crown Arena v3.0 (WebRTC Fixed)</title>
+    <title>Crown Arena v3.1 (Smooth)</title>
     <style>
         body {
             margin: 0;
@@ -233,7 +233,7 @@
 
     <div id="layer-menu" class="layer">
         <div class="panel">
-            <h1>Crown Arena v3.0</h1>
+            <h1>Crown Arena v3.1</h1>
             <input type="text" id="input-name" placeholder="Your Name" style="margin-bottom: 15px;">
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
             <div style="margin: 10px 0; color:#666;">- OR -</div>
@@ -333,7 +333,6 @@
 
     class Game {
         constructor() {
-            // 1. Canvas取得を最初に行う
             this.canvas = document.getElementById("gameCanvas");
             this.ctx = this.canvas.getContext("2d");
 
@@ -343,8 +342,8 @@
             
             this.state = {
                 players: {
-                    p1: { x: 100, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0, name: "Blue" },
-                    p2: { x: 300, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0, name: "Green" }
+                    p1: { x: 100, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0, name: "Blue", targetX: 100, targetY: 100 },
+                    p2: { x: 300, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0, name: "Green", targetX: 300, targetY: 100 }
                 },
                 status: "waiting",
                 remainingTime: GAME_DURATION,
@@ -374,12 +373,10 @@
             this.unsubscribe = null;
             this.isRoomReady = false;
 
-            // WebRTC
             this.pc = null;
             this.dc = null;
             this.connected = false;
 
-            // 2. Canvas取得後にresizeを実行
             this.resize();
             window.addEventListener('resize', () => this.resize());
             this.setupInputs();
@@ -461,12 +458,16 @@
         resetLocalState() {
             this.state.players.p1.x = 100;
             this.state.players.p1.y = 100;
+            this.state.players.p1.targetX = 100;
+            this.state.players.p1.targetY = 100;
             this.state.players.p1.hp = 100;
             this.state.players.p1.ult = 0;
             this.state.players.p1.active = true;
 
             this.state.players.p2.x = this.canvas.width - 100;
             this.state.players.p2.y = 100;
+            this.state.players.p2.targetX = this.canvas.width - 100;
+            this.state.players.p2.targetY = 100;
             this.state.players.p2.hp = 100;
             this.state.players.p2.ult = 0;
             this.state.players.p2.active = false;
@@ -602,8 +603,21 @@
                 case 'sync': 
                     this.state.remainingTime = msg.time;
                     this.state.status = msg.status;
-                    Object.assign(this.state.players.p1, msg.p1);
+                    
+                    // Sync P1 (Opponent if I am Guest)
+                    const remoteP1 = msg.p1;
+                    const localP1 = this.state.players.p1;
+                    localP1.targetX = remoteP1.x;
+                    localP1.targetY = remoteP1.y;
+                    localP1.hp = remoteP1.hp;
+                    localP1.ult = remoteP1.ult;
+                    localP1.slowUntil = remoteP1.slowUntil;
+                    localP1.active = remoteP1.active;
+                    localP1.name = remoteP1.name;
+
+                    // Sync P2 (Me if I am Guest)
                     Object.assign(this.state.players.p2, msg.p2);
+
                     if (msg.status === 'playing') {
                         this.switchLayer(null);
                         this.hud.classList.remove('hidden');
@@ -616,8 +630,8 @@
 
                 case 'input': 
                     const p2 = this.state.players.p2;
-                    p2.x = msg.x;
-                    p2.y = msg.y;
+                    p2.targetX = msg.x;
+                    p2.targetY = msg.y;
                     p2.active = true;
                     break;
 
@@ -765,6 +779,17 @@
                     me.x = Math.max(20, Math.min(this.canvas.width - 20, me.x));
                     me.y = Math.max(20, Math.min(this.canvas.height - 20, me.y));
                 }
+
+                // Interpolation for opponent
+                ['p1', 'p2'].forEach(pid => {
+                    if (pid !== this.myId) {
+                        const p = this.state.players[pid];
+                        if (p.active) {
+                            p.x += (p.targetX - p.x) * 0.2;
+                            p.y += (p.targetY - p.y) * 0.2;
+                        }
+                    }
+                });
 
                 if (this.connected) {
                     if (this.isHost) {
