@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crown Arena v2.1</title>
+    <title>Crown Arena v2.2</title>
     <style>
         body {
             margin: 0;
@@ -133,12 +133,18 @@
             transition: width 0.2s, background-color 0.2s;
         }
 
-        /* Ammo Bar */
-        #ammo-container {
+        /* Ammo UI */
+        #ammo-wrapper {
             position: absolute;
-            bottom: 140px;
+            bottom: 130px;
             left: 50%;
             transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+        }
+        #ammo-container {
             display: flex;
             gap: 5px;
         }
@@ -152,6 +158,18 @@
         .ammo-active {
             background: #ff9800;
             box-shadow: 0 0 5px #ff9800;
+        }
+        #reload-bar-bg {
+            width: 100px;
+            height: 4px;
+            background: #222;
+            border: 1px solid #555;
+        }
+        #reload-bar-fill {
+            height: 100%;
+            background: #ff9800;
+            width: 0%;
+            transition: width 0.1s linear;
         }
 
         /* ULT UI */
@@ -221,7 +239,7 @@
 
     <div id="layer-menu" class="layer">
         <div class="panel">
-            <h1>Crown Arena v2.1</h1>
+            <h1>Crown Arena v2.2</h1>
             <input type="text" id="input-name" placeholder="Your Name" style="margin-bottom: 15px;">
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
             <div style="margin: 10px 0; color:#666;">- OR -</div>
@@ -270,10 +288,13 @@
             <div class="hp-bar-bg"><div id="bar-hp-p2" class="hp-fill"></div></div>
         </div>
 
-        <div id="ammo-container">
-            <div class="ammo-slot ammo-active" id="ammo-1"></div>
-            <div class="ammo-slot ammo-active" id="ammo-2"></div>
-            <div class="ammo-slot ammo-active" id="ammo-3"></div>
+        <div id="ammo-wrapper">
+            <div id="ammo-container">
+                <div class="ammo-slot ammo-active" id="ammo-1"></div>
+                <div class="ammo-slot ammo-active" id="ammo-2"></div>
+                <div class="ammo-slot ammo-active" id="ammo-3"></div>
+            </div>
+            <div id="reload-bar-bg"><div id="reload-bar-fill"></div></div>
         </div>
 
         <div id="ult-container">
@@ -310,12 +331,12 @@
     const BULLET_RADIUS = 6;
     const ULT_RADIUS = 20;
     const MOVE_SPEED = 5;
-    const BULLET_SPEED = 15; // 弾速アップ
-    const KNOCKBACK_FORCE = 10; // ノックバック距離
+    const BULLET_SPEED = 15;
+    const KNOCKBACK_FORCE = 10;
     
     const AMMO_MAX = 3;
-    const AMMO_RELOAD_TIME = 1500; // 1.5秒
-    const FIRE_RATE = 200; // 連射間隔制限
+    const AMMO_RELOAD_TIME = 1500;
+    const FIRE_RATE = 200; 
     const SYNC_INTERVAL = 50; 
     
     const GAME_DURATION = 60; 
@@ -348,6 +369,10 @@
             this.myAmmo = AMMO_MAX;
             this.ammoTimer = 0;
             this.lastFireTime = 0;
+            this.ultLocked = false; // ULT連射防止フラグ
+
+            // Audio
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
             // Input
             this.input = {
@@ -355,7 +380,7 @@
                 aim:  { active: false, x: 0, y: 0, id: null, angle: 0 },
             };
             
-            // Stick Positions (Fixed)
+            // Stick Positions
             this.stickLeftBase = { x: 0, y: 0 };
             this.stickRightBase = { x: 0, y: 0 };
             this.stickRadius = 60;
@@ -388,43 +413,93 @@
         resize() {
             this.canvas.width = window.innerWidth;
             this.canvas.height = window.innerHeight;
-            // 固定スティック位置：左下と右下
             this.stickLeftBase = { x: 120, y: this.canvas.height - 120 };
             this.stickRightBase = { x: this.canvas.width - 120, y: this.canvas.height - 120 };
+        }
+
+        // --- Audio ---
+        initAudio() {
+            if (this.audioCtx.state === 'suspended') {
+                this.audioCtx.resume();
+            }
+        }
+
+        playShootSound() {
+            if (!this.audioCtx) return;
+            const osc = this.audioCtx.createOscillator();
+            const gain = this.audioCtx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(400, this.audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(100, this.audioCtx.currentTime + 0.05);
+            gain.gain.setValueAtTime(0.1, this.audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, this.audioCtx.currentTime + 0.05);
+            osc.connect(gain);
+            gain.connect(this.audioCtx.destination);
+            osc.start();
+            osc.stop(this.audioCtx.currentTime + 0.05);
+        }
+
+        playUltSound() {
+            if (!this.audioCtx) return;
+            const osc = this.audioCtx.createOscillator();
+            const gain = this.audioCtx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(200, this.audioCtx.currentTime);
+            osc.frequency.linearRampToValueAtTime(800, this.audioCtx.currentTime + 0.3);
+            gain.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, this.audioCtx.currentTime + 0.3);
+            osc.connect(gain);
+            gain.connect(this.audioCtx.destination);
+            osc.start();
+            osc.stop(this.audioCtx.currentTime + 0.3);
+        }
+
+        playHitSound() {
+            if (!this.audioCtx) return;
+            const osc = this.audioCtx.createOscillator();
+            const gain = this.audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(150, this.audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(50, this.audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.2, this.audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, this.audioCtx.currentTime + 0.1);
+            osc.connect(gain);
+            gain.connect(this.audioCtx.destination);
+            osc.start();
+            osc.stop(this.audioCtx.currentTime + 0.1);
         }
 
         // --- Network ---
 
         resetLocalState() {
-            // ホスト・ゲスト共通の初期化
-            // 修正①: ホスト(p1)は必ずアクティブで初期化する
             this.state.players.p1.x = 100;
             this.state.players.p1.y = 100;
             this.state.players.p1.hp = 100;
             this.state.players.p1.ult = 0;
-            this.state.players.p1.active = true; // Hostは初期状態でアクティブ
+            this.state.players.p1.active = true;
 
             this.state.players.p2.x = this.canvas.width - 100;
             this.state.players.p2.y = 100;
             this.state.players.p2.hp = 100;
             this.state.players.p2.ult = 0;
-            this.state.players.p2.active = false; // Guestはまだ
+            this.state.players.p2.active = false;
 
             this.myAmmo = AMMO_MAX;
             this.localBullets = [];
+            this.ultLocked = false;
         }
 
         async createRoom() {
+            this.initAudio();
             this.roomId = Math.floor(1000 + Math.random() * 9000).toString();
             this.isHost = true;
             this.myId = 'p1';
             this.resetLocalState();
 
-            // 名前取得
             const nameInput = document.getElementById("input-name");
             const myName = nameInput.value.trim() || "Blue";
             this.state.players.p1.name = myName;
-            this.state.players.p1.active = true; // 念のため再設定
+            this.state.players.p1.active = true;
 
             const initialData = {
                 players: {
@@ -454,6 +529,7 @@
         }
 
         async joinRoom(id) {
+            this.initAudio();
             const docRef = doc(db, "rooms", id);
             try {
                 const snap = await getDoc(docRef);
@@ -465,7 +541,6 @@
                 this.myId = 'p2';
                 this.resetLocalState(); 
 
-                // 名前取得
                 const nameInput = document.getElementById("input-name");
                 const myName = nameInput.value.trim() || "Green";
                 this.state.players.p2.name = myName;
@@ -519,7 +594,6 @@
 
                 if (data.startTime) this.state.startTime = data.startTime;
 
-                // Bullet Events
                 if (data.bulletSeq > this.state.bulletSeq) {
                     if (data.lastShooter !== this.myId) {
                         this.spawnBulletFromSync(data.lastShooter, false, data.lastAngle);
@@ -533,14 +607,12 @@
                     this.state.ultSeq = data.ultSeq;
                 }
 
-                // Player Sync
                 if (this.isHost) {
                     if (data.players.p2) {
                         const p2 = this.state.players.p2;
                         p2.x = data.players.p2.x;
                         p2.y = data.players.p2.y;
                         p2.active = data.players.p2.active;
-                        // 名前も更新
                         if(data.players.p2.name) p2.name = data.players.p2.name;
                     }
                 } else {
@@ -574,7 +646,6 @@
             const ref = doc(db, "rooms", this.roomId);
             const me = this.state.players[this.myId];
 
-            // 安全策：NaNなら送信しない
             if (isNaN(me.x) || isNaN(me.y)) return;
 
             try {
@@ -601,9 +672,8 @@
 
         // --- Logic ---
 
-        // 攻撃スティック離した時に呼ばれる
         tryFire(angle) {
-            if (this.myAmmo <= 0) return; // 弾切れ
+            if (this.myAmmo <= 0) return;
             const now = Date.now();
             if (now - this.lastFireTime < FIRE_RATE) return;
 
@@ -614,14 +684,14 @@
             this.sendFireEvent(false, angle);
         }
 
-        // ULTオートエイム
         triggerUlt() {
+            if (this.ultLocked) return;
             const me = this.state.players[this.myId];
             if (me.ult < ULT_MAX) return;
 
-            me.ult = 0;
+            this.ultLocked = true;
+            me.ult = 0; // Local immediate update
             
-            // オートエイム計算
             const targetId = (this.myId === 'p1') ? 'p2' : 'p1';
             const target = this.state.players[targetId];
             let angle = 0;
@@ -633,6 +703,9 @@
 
             this.spawnBulletLocal(this.myId, true, angle);
             this.sendFireEvent(true, angle);
+
+            // Cooldown lock
+            setTimeout(() => { this.ultLocked = false; }, 500);
         }
 
         async sendFireEvent(isUlt, angle) {
@@ -643,7 +716,7 @@
                         ultSeq: increment(1), 
                         lastShooter: this.myId, 
                         lastAngle: angle,
-                        [`players.${this.myId}.ult`]: 0 // 修正②：FirestoreのULTもリセット
+                        [`players.${this.myId}.ult`]: 0
                     });
                 } else {
                     await updateDoc(ref, { bulletSeq: increment(1), lastShooter: this.myId, lastAngle: angle });
@@ -659,7 +732,6 @@
             const p = this.state.players[ownerId];
             if (!p || !p.active) return;
 
-            // 座標NaNチェック
             if (isNaN(p.x) || isNaN(p.y)) return;
 
             this.localBullets.push({
@@ -673,7 +745,7 @@
                 r: isUlt ? ULT_RADIUS : BULLET_RADIUS
             });
 
-            // エフェクト
+            // Effect
             for(let i=0; i<5; i++){
                 this.particles.push({
                     x: p.x + Math.cos(angle)*20, 
@@ -684,6 +756,10 @@
                     color: isUlt ? '#d000ff' : '#ffaa00'
                 });
             }
+
+            // Sound
+            if (isUlt) this.playUltSound();
+            else this.playShootSound();
         }
 
         // --- Loop ---
@@ -693,7 +769,6 @@
             const deltaTimeSec = (now - this.lastFrameTime) / 1000;
             this.lastFrameTime = now;
 
-            // Timer
             if (this.state.status === "playing" && this.state.startTime) {
                 const elapsed = (now - this.state.startTime) / 1000;
                 this.state.remainingTime = Math.max(0, GAME_DURATION - elapsed);
@@ -703,7 +778,7 @@
             }
 
             if (this.state.status === "playing") {
-                // Ammo Reload
+                // Reload
                 if (this.myAmmo < AMMO_MAX) {
                     this.ammoTimer += (deltaTimeSec * 1000);
                     if (this.ammoTimer >= AMMO_RELOAD_TIME) {
@@ -714,7 +789,6 @@
                     this.ammoTimer = 0;
                 }
 
-                // Host Logic
                 if (this.isHost) {
                     ['p1', 'p2'].forEach(pid => {
                         const p = this.state.players[pid];
@@ -725,7 +799,6 @@
                     });
                 }
 
-                // Movement
                 const me = this.state.players[this.myId];
                 if (me) {
                     let speed = MOVE_SPEED;
@@ -738,7 +811,6 @@
                         me.y += my * speed;
                     }
 
-                    // NaN Check
                     if (isNaN(me.x)) me.x = 100;
                     if (isNaN(me.y)) me.y = 100;
 
@@ -777,20 +849,17 @@
                     
                     if (Math.hypot(dx, dy) < PLAYER_RADIUS + b.r) {
                         hit = true; 
+                        this.playHitSound();
                         
-                        // Host Only Logic
                         if (this.isHost) {
                             const dmg = b.isUlt ? 20 : 10;
                             target.hp -= dmg;
                             target.ult = Math.min(ULT_MAX, target.ult + ULT_CHARGE_HIT);
                             if (b.isUlt) target.slowUntil = Date.now() + 3000;
 
-                            // Knockback
                             const knockDist = KNOCKBACK_FORCE;
                             target.x += Math.cos(b.angle) * knockDist;
                             target.y += Math.sin(b.angle) * knockDist;
-                            
-                            // Bounds check for target
                             target.x = Math.max(20, Math.min(this.canvas.width - 20, target.x));
                             target.y = Math.max(20, Math.min(this.canvas.height - 20, target.y));
 
@@ -847,13 +916,11 @@
         }
 
         updateUI() {
-            // Timer
             const timerEl = document.getElementById('timer-container');
             if (timerEl) {
                 timerEl.innerText = Math.max(0, Math.ceil(this.state.remainingTime));
             }
 
-            // HP Bars (Width Only)
             const p1 = this.state.players.p1;
             const p2 = this.state.players.p2;
             
@@ -869,7 +936,6 @@
                 barP2.style.backgroundColor = p2.hp > 30 ? '#0f0' : '#f00';
             }
 
-            // ULT (自分の分だけ)
             const myUlt = this.state.players[this.myId]?.ult || 0;
             const barUlt = document.getElementById('bar-ult');
             if (barUlt) {
@@ -882,11 +948,19 @@
                 else btnUlt.classList.remove('ready');
             }
 
-            // Ammo
             for(let i=1; i<=3; i++) {
                 const el = document.getElementById('ammo-'+i);
                 if(i <= this.myAmmo) el.classList.add('ammo-active');
                 else el.classList.remove('ammo-active');
+            }
+
+            // Reload Bar
+            const reloadBar = document.getElementById('reload-bar-fill');
+            if (this.myAmmo < AMMO_MAX) {
+                const pct = (this.ammoTimer / AMMO_RELOAD_TIME) * 100;
+                reloadBar.style.width = pct + "%";
+            } else {
+                reloadBar.style.width = "0%";
             }
         }
 
@@ -952,17 +1026,13 @@
             } catch (e) {}
         }
 
-        // --- Draw ---
-
         draw() {
             this.ctx.fillStyle = '#222';
             this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
-            // Stick Bases (Fixed)
             this.drawStickBase(this.stickLeftBase);
             this.drawStickBase(this.stickRightBase);
 
-            // Stick Inputs
             if (this.input.move.active) {
                 this.drawStickKnob(this.stickLeftBase, this.input.move.angle);
             } else {
@@ -971,23 +1041,26 @@
 
             if (this.input.aim.active) {
                 this.drawStickKnob(this.stickRightBase, this.input.aim.angle);
-                // Aim Line
-                this.ctx.beginPath();
-                this.ctx.moveTo(this.stickRightBase.x, this.stickRightBase.y);
-                this.ctx.lineTo(
-                    this.stickRightBase.x + Math.cos(this.input.aim.angle) * 200, 
-                    this.stickRightBase.y + Math.sin(this.input.aim.angle) * 200
-                );
-                this.ctx.strokeStyle = 'rgba(255,0,0,0.3)';
-                this.ctx.lineWidth = 2;
-                this.ctx.setLineDash([5, 5]);
-                this.ctx.stroke();
-                this.ctx.setLineDash([]);
+                
+                // Trajectory Line (My Player Only)
+                const me = this.state.players[this.myId];
+                if (me && me.active) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(me.x, me.y);
+                    this.ctx.lineTo(
+                        me.x + Math.cos(this.input.aim.angle) * 400, 
+                        me.y + Math.sin(this.input.aim.angle) * 400
+                    );
+                    this.ctx.strokeStyle = 'rgba(255, 255, 0, 0.5)';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.setLineDash([5, 5]);
+                    this.ctx.stroke();
+                    this.ctx.setLineDash([]);
+                }
             } else {
                 this.drawStickKnobCentered(this.stickRightBase);
             }
 
-            // Players
             ['p1', 'p2'].forEach(pid => {
                 const p = this.state.players[pid];
                 if (!p.active) return;
@@ -997,7 +1070,6 @@
                 this.ctx.fillStyle = pid === 'p1' ? '#00ccff' : '#00ff00';
                 this.ctx.fill();
                 
-                // 修正③：名前描画
                 this.ctx.fillStyle = 'white';
                 this.ctx.font = '14px monospace';
                 this.ctx.textAlign = 'center';
@@ -1014,7 +1086,6 @@
                 }
             });
 
-            // Particles
             this.particles.forEach(p => {
                 this.ctx.beginPath();
                 this.ctx.arc(p.x, p.y, p.size || 2, 0, Math.PI*2);
@@ -1022,7 +1093,6 @@
                 this.ctx.fill();
             });
 
-            // Bullets
             this.localBullets.forEach(b => {
                 this.ctx.beginPath();
                 this.ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
@@ -1073,19 +1143,24 @@
             requestAnimationFrame((t) => this.loop(t));
         }
 
-        // --- Inputs ---
         bindButtons() {
-            document.getElementById('btn-create').onclick = () => this.createRoom();
+            document.getElementById('btn-create').onclick = () => {
+                this.initAudio();
+                this.createRoom();
+            };
             document.getElementById('btn-join').onclick = () => {
                 const id = document.getElementById('input-room').value;
-                if(id.length === 4) this.joinRoom(id);
-                else alert("Enter 4 digits");
+                if(id.length === 4) {
+                    this.initAudio();
+                    this.joinRoom(id);
+                } else alert("Enter 4 digits");
             };
             document.getElementById('btn-restart').onclick = () => this.restartGame();
             document.getElementById('btn-close').onclick = () => this.disbandRoom();
             document.getElementById('btn-leave').onclick = () => location.reload();
             document.getElementById('btn-ult').onclick = (e) => {
                 e.stopPropagation();
+                this.initAudio();
                 this.triggerUlt();
             };
         }
@@ -1099,7 +1174,7 @@
                     const x = t.clientX;
                     const y = t.clientY;
 
-                    // Left side: Move Stick
+                    // Left Stick
                     const distLeft = Math.hypot(x - this.stickLeftBase.x, y - this.stickLeftBase.y);
                     if (distLeft < 100) {
                         this.input.move.active = true;
@@ -1108,8 +1183,7 @@
                         continue;
                     }
 
-                    // Right side: Aim Stick
-                    // ULTボタンエリア除外
+                    // Right Stick
                     const ultRect = document.getElementById('btn-ult').getBoundingClientRect();
                     if (x >= ultRect.left && x <= ultRect.right && y >= ultRect.top && y <= ultRect.bottom) {
                         continue;
@@ -1152,7 +1226,6 @@
                         this.input.move.id = null;
                     }
                     if (this.input.aim.id === t.identifier) {
-                        // Fire on release
                         this.tryFire(this.input.aim.angle);
                         this.input.aim.active = false;
                         this.input.aim.id = null;
