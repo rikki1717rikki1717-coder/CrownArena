@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Crown Arena v2.2</title>
+    <title>Crown Arena v3.0 (WebRTC Fixed)</title>
     <style>
         body {
             margin: 0;
@@ -20,7 +20,6 @@
             display: block;
         }
 
-        /* --- UI Layers --- */
         .layer {
             position: absolute;
             top: 0;
@@ -86,7 +85,6 @@
         .lose { color: #ff0000; }
         .draw { color: #aaaaaa; }
 
-        /* --- HUD --- */
         #hud {
             position: absolute;
             top: 0;
@@ -97,7 +95,6 @@
             z-index: 10;
         }
 
-        /* Timer */
         #timer-container {
             position: absolute;
             top: 10px;
@@ -109,7 +106,6 @@
             text-shadow: 0 0 5px #000;
         }
         
-        /* HP Bars */
         .player-info {
             position: absolute;
             top: 10px;
@@ -133,7 +129,6 @@
             transition: width 0.2s, background-color 0.2s;
         }
 
-        /* Ammo UI */
         #ammo-wrapper {
             position: absolute;
             bottom: 130px;
@@ -172,7 +167,6 @@
             transition: width 0.1s linear;
         }
 
-        /* ULT UI */
         #ult-container {
             position: absolute;
             top: 60px;
@@ -239,7 +233,7 @@
 
     <div id="layer-menu" class="layer">
         <div class="panel">
-            <h1>Crown Arena v2.2</h1>
+            <h1>Crown Arena v3.0</h1>
             <input type="text" id="input-name" placeholder="Your Name" style="margin-bottom: 15px;">
             <button class="btn-host" id="btn-create">Create Room (Host)</button>
             <div style="margin: 10px 0; color:#666;">- OR -</div>
@@ -262,12 +256,10 @@
         <div class="panel">
             <h2 id="result-title">RESULT</h2>
             <div id="result-msg" style="margin-bottom:20px;"></div>
-            
             <div id="host-controls" class="hidden">
                 <button class="btn-restart" id="btn-restart">Play Again</button>
                 <button class="btn-close" id="btn-close">Disband Room</button>
             </div>
-            
             <div id="guest-controls" class="hidden">
                 <div style="color:#aaa; margin-bottom:10px;">Waiting for Host...</div>
                 <button class="btn-close" id="btn-leave">Leave Room</button>
@@ -277,17 +269,14 @@
 
     <div id="hud" class="hidden">
         <div id="timer-container">60</div>
-
         <div class="player-info p1-info">
             P1 (Blue)
             <div class="hp-bar-bg"><div id="bar-hp-p1" class="hp-fill"></div></div>
         </div>
-        
         <div class="player-info p2-info">
             P2 (Green)
             <div class="hp-bar-bg"><div id="bar-hp-p2" class="hp-fill"></div></div>
         </div>
-
         <div id="ammo-wrapper">
             <div id="ammo-container">
                 <div class="ammo-slot ammo-active" id="ammo-1"></div>
@@ -296,24 +285,19 @@
             </div>
             <div id="reload-bar-bg"><div id="reload-bar-fill"></div></div>
         </div>
-
         <div id="ult-container">
             <div class="ult-gauge-bg"><div id="bar-ult" class="ult-fill"></div></div>
             <div id="btn-ult">ULT</div>
         </div>
-
         <div id="room-id-display">Room: ----</div>
     </div>
 
     <canvas id="gameCanvas"></canvas>
 
 <script type="module">
-    // ---------------------------------------------------------
-    // 1. Firebase Config & Imports
-    // ---------------------------------------------------------
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { 
-        getFirestore, doc, setDoc, updateDoc, onSnapshot, getDoc, deleteDoc, increment 
+        getFirestore, doc, setDoc, updateDoc, onSnapshot, getDoc, deleteDoc, collection, addDoc 
     } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -329,87 +313,77 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
-    // ---------------------------------------------------------
-    // 2. Constants & Globals
-    // ---------------------------------------------------------
-    const CANVAS = document.getElementById('gameCanvas');
-    const CTX = CANVAS.getContext('2d');
-    
-    // Game Config
     const PLAYER_RADIUS = 20;
     const BULLET_RADIUS = 6;
     const ULT_RADIUS = 20;
     const MOVE_SPEED = 5;
     const BULLET_SPEED = 15;
     const KNOCKBACK_FORCE = 10;
-    
     const AMMO_MAX = 3;
     const AMMO_RELOAD_TIME = 1500;
-    const FIRE_RATE = 200; 
-    const SYNC_INTERVAL = 50; 
-    
-    const GAME_DURATION = 60; 
+    const FIRE_RATE = 200;
+    const GAME_DURATION = 60;
     const ULT_MAX = 100;
-    const ULT_CHARGE_PASSIVE = 5; // 毎秒
-    const ULT_CHARGE_HIT = 10;    // 被弾時
+    const ULT_CHARGE_PASSIVE = 5;
+    const ULT_CHARGE_HIT = 10;
 
-    // ---------------------------------------------------------
-    // 3. Game Logic Class
-    // ---------------------------------------------------------
+    const rtcConfig = {
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    };
+
     class Game {
         constructor() {
+            // 1. Canvas取得を最初に行う
+            this.canvas = document.getElementById("gameCanvas");
+            this.ctx = this.canvas.getContext("2d");
+
             this.roomId = null;
             this.isHost = false; 
-            this.myId = null; // 'p1' or 'p2'
+            this.myId = null; 
             
-            // ゲーム状態
             this.state = {
                 players: {
                     p1: { x: 100, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0, name: "Blue" },
                     p2: { x: 300, y: 100, hp: 100, active: false, ult: 0, slowUntil: 0, name: "Green" }
                 },
-                status: "waiting", // waiting, playing, finished
+                status: "waiting",
                 remainingTime: GAME_DURATION,
-                startTime: null,
-                bulletSeq: 0,
-                ultSeq: 0
+                startTime: null
             };
 
-            this.localBullets = []; // Client Prediction用
+            this.localBullets = []; 
             this.particles = [];
-
-            // Local Game State
             this.myAmmo = AMMO_MAX;
             this.ammoTimer = 0;
             this.lastFireTime = 0;
-            this.ultLocked = false; // ULT連射防止フラグ
+            this.ultLocked = false;
 
-            // Audio
             this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-            // Input
             this.input = {
                 move: { active: false, x: 0, y: 0, id: null, angle: 0 },
                 aim:  { active: false, x: 0, y: 0, id: null, angle: 0 },
             };
             
-            // Stick Positions
             this.stickLeftBase = { x: 0, y: 0 };
             this.stickRightBase = { x: 0, y: 0 };
             this.stickRadius = 60;
 
-            // Timers
-            this.lastSyncTime = 0;
-            this.lastTimeTick = 0;
             this.lastFrameTime = Date.now();
+            this.lastTimeTick = 0;
             this.unsubscribe = null;
             this.isRoomReady = false;
 
+            // WebRTC
+            this.pc = null;
+            this.dc = null;
+            this.connected = false;
+
+            // 2. Canvas取得後にresizeを実行
             this.resize();
             window.addEventListener('resize', () => this.resize());
             this.setupInputs();
             
-            // UI References
             this.layers = {
                 menu: document.getElementById('layer-menu'),
                 wait: document.getElementById('layer-wait'),
@@ -419,18 +393,20 @@
             
             this.bindButtons();
 
-            // Loop
             requestAnimationFrame((t) => this.loop(t));
         }
 
         resize() {
-            CANVAS.width = window.innerWidth;
-            CANVAS.height = window.innerHeight;
+            if (!this.canvas) {
+                console.error("Canvas not found");
+                return;
+            }
+            this.canvas.width = window.innerWidth;
+            this.canvas.height = window.innerHeight;
             this.stickLeftBase = { x: 120, y: this.canvas.height - 120 };
             this.stickRightBase = { x: this.canvas.width - 120, y: this.canvas.height - 120 };
         }
 
-        // --- Audio ---
         initAudio() {
             if (this.audioCtx.state === 'suspended') {
                 this.audioCtx.resume();
@@ -482,10 +458,7 @@
             osc.stop(this.audioCtx.currentTime + 0.1);
         }
 
-        // --- Network Actions ---
-
         resetLocalState() {
-            // ホスト・ゲスト共通の初期化
             this.state.players.p1.x = 100;
             this.state.players.p1.y = 100;
             this.state.players.p1.hp = 100;
@@ -501,6 +474,7 @@
             this.myAmmo = AMMO_MAX;
             this.localBullets = [];
             this.ultLocked = false;
+            this.connected = false;
         }
 
         async createRoom() {
@@ -513,183 +487,168 @@
             const nameInput = document.getElementById("input-name");
             const myName = nameInput.value.trim() || "Blue";
             this.state.players.p1.name = myName;
-            this.state.players.p1.active = true;
+
+            this.pc = new RTCPeerConnection(rtcConfig);
+            this.dc = this.pc.createDataChannel("game", { ordered: false, maxRetransmits: 0 });
+            this.setupDataChannel(this.dc);
+
+            this.collectIceCandidates('callerCandidates', 'calleeCandidates');
+
+            const offer = await this.pc.createOffer();
+            await this.pc.setLocalDescription(offer);
 
             const initialData = {
-                players: {
-                    p1: this.state.players.p1,
-                    p2: { ...this.state.players.p2, name: "Green", active: false } 
-                },
+                offer: { type: offer.type, sdp: offer.sdp },
                 status: "waiting",
-                startTime: null,
-                winner: null,
-                bulletSeq: 0,
-                ultSeq: 0,
-                lastShooter: null,
-                lastAngle: 0
+                p1Name: myName
             };
 
-            try {
-                await setDoc(doc(db, "rooms", this.roomId), initialData);
-                this.isRoomReady = true;
-                this.switchLayer('wait');
-                document.getElementById('display-room-code').innerText = this.roomId;
-                document.getElementById('room-id-display').innerText = "Room: " + this.roomId;
-                this.subscribeToRoom();
-            } catch (e) {
-                console.error(e);
-                alert("Error creating room.");
-            }
+            await setDoc(doc(db, "rooms", this.roomId), initialData);
+            this.isRoomReady = true;
+            this.switchLayer('wait');
+            document.getElementById('display-room-code').innerText = this.roomId;
+            document.getElementById('room-id-display').innerText = "Room: " + this.roomId;
+
+            this.unsubscribe = onSnapshot(doc(db, "rooms", this.roomId), async (docSnap) => {
+                if (!docSnap.exists()) return;
+                const data = docSnap.data();
+                if (data.answer && !this.pc.currentRemoteDescription) {
+                    const answer = new RTCSessionDescription(data.answer);
+                    await this.pc.setRemoteDescription(answer);
+                }
+                if (data.p2Name) this.state.players.p2.name = data.p2Name;
+            });
         }
 
         async joinRoom(id) {
             this.initAudio();
             const docRef = doc(db, "rooms", id);
-            try {
-                const snap = await getDoc(docRef);
-                if (!snap.exists()) { alert("Room not found!"); return; }
-                if (snap.data().status === "closed") { alert("Room is closed."); return; }
+            const snap = await getDoc(docRef);
+            if (!snap.exists()) { alert("Room not found"); return; }
+            const data = snap.data();
 
-                this.roomId = id;
-                this.isHost = false;
-                this.myId = 'p2';
-                this.resetLocalState(); 
+            this.roomId = id;
+            this.isHost = false;
+            this.myId = 'p2';
+            this.resetLocalState();
 
-                const nameInput = document.getElementById("input-name");
-                const myName = nameInput.value.trim() || "Green";
-                this.state.players.p2.name = myName;
-                this.state.players.p2.active = true;
+            const nameInput = document.getElementById("input-name");
+            const myName = nameInput.value.trim() || "Green";
+            this.state.players.p2.name = myName;
+            this.state.players.p2.active = true;
+            if(data.p1Name) this.state.players.p1.name = data.p1Name;
 
-                await updateDoc(docRef, {
-                    "players.p2.active": true,
-                    "players.p2.x": this.state.players.p2.x,
-                    "players.p2.name": myName
-                });
+            this.pc = new RTCPeerConnection(rtcConfig);
+            this.pc.ondatachannel = (e) => this.setupDataChannel(e.channel);
 
-                document.getElementById('room-id-display').innerText = "Room: " + this.roomId;
-                this.isRoomReady = true;
-                this.subscribeToRoom();
+            this.collectIceCandidates('calleeCandidates', 'callerCandidates');
 
-            } catch (e) {
-                console.error(e);
-                alert("Error joining room.");
-            }
+            await this.pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+            const answer = await this.pc.createAnswer();
+            await this.pc.setLocalDescription(answer);
+
+            await updateDoc(docRef, {
+                answer: { type: answer.type, sdp: answer.sdp },
+                p2Name: myName
+            });
+
+            document.getElementById('room-id-display').innerText = "Room: " + this.roomId;
+            this.switchLayer('wait');
         }
 
-        subscribeToRoom() {
-            if (this.unsubscribe) this.unsubscribe();
-            
-            this.unsubscribe = onSnapshot(doc(db, "rooms", this.roomId), (docSnap) => {
-                if (!docSnap.exists()) {
-                    console.warn("Doc missing");
-                    return;
-                }
-                const data = docSnap.data();
-                
-                if (data.status === "closed") {
-                    alert("Room closed.");
-                    location.reload();
-                    return;
-                }
+        collectIceCandidates(localColName, remoteColName) {
+            const roomRef = doc(db, "rooms", this.roomId);
+            const localCol = collection(roomRef, localColName);
+            const remoteCol = collection(roomRef, remoteColName);
 
-                if (this.isHost && this.state.status === "waiting" && data.players.p2?.active) {
-                    this.startGameAsHost();
+            this.pc.onicecandidate = async (event) => {
+                if (event.candidate) {
+                    await addDoc(localCol, event.candidate.toJSON());
                 }
+            };
 
-                if (data.status === "playing") {
-                    this.switchLayer(null); 
-                    this.state.status = "playing";
-                    this.hud.classList.remove('hidden');
-                } else if (data.status === "finished") {
-                    this.state.status = "finished";
-                    this.hud.classList.add('hidden');
-                    this.showResult(data.winner);
-                }
-
-                if (data.startTime) this.state.startTime = data.startTime;
-
-                // Bullet Events
-                if (data.bulletSeq > this.state.bulletSeq) {
-                    if (data.lastShooter !== this.myId) {
-                        this.spawnBulletFromSync(data.lastShooter, false, data.lastAngle);
+            onSnapshot(remoteCol, (snapshot) => {
+                snapshot.docChanges().forEach(async (change) => {
+                    if (change.type === 'added') {
+                        const candidate = new RTCIceCandidate(change.doc.data());
+                        await this.pc.addIceCandidate(candidate);
                     }
-                    this.state.bulletSeq = data.bulletSeq;
-                }
-                if (data.ultSeq > this.state.ultSeq) {
-                    if (data.lastShooter !== this.myId) {
-                        this.spawnBulletFromSync(data.lastShooter, true, data.lastAngle);
-                    }
-                    this.state.ultSeq = data.ultSeq;
-                }
-
-                // Player Sync
-                if (this.isHost) {
-                    if (data.players.p2) {
-                        const p2 = this.state.players.p2;
-                        p2.x = data.players.p2.x;
-                        p2.y = data.players.p2.y;
-                        p2.active = data.players.p2.active;
-                        if(data.players.p2.name) p2.name = data.players.p2.name;
-                    }
-                } else {
-                    if (data.players.p1) Object.assign(this.state.players.p1, data.players.p1);
-                    if (data.players.p2) {
-                        const p2 = this.state.players.p2;
-                        p2.hp = data.players.p2.hp;
-                        p2.ult = data.players.p2.ult;
-                        p2.slowUntil = data.players.p2.slowUntil;
-                        p2.active = data.players.p2.active;
-                        if(data.players.p2.name) p2.name = data.players.p2.name;
-                    }
-                }
-                this.updateUI();
+                });
             });
         }
 
-        async startGameAsHost() {
-            const now = Date.now();
-            this.state.startTime = now;
-            try {
-                await updateDoc(doc(db, "rooms", this.roomId), {
-                    startTime: now,
-                    status: "playing"
-                });
-            } catch(e) {}
-        }
-
-        async syncToFirestore() {
-            if (!this.roomId || this.state.status === "finished") return;
-            const ref = doc(db, "rooms", this.roomId);
-            const me = this.state.players[this.myId];
-
-            if (isNaN(me.x) || isNaN(me.y)) return;
-
-            try {
+        setupDataChannel(dc) {
+            this.dc = dc;
+            this.dc.onopen = () => {
+                this.connected = true;
                 if (this.isHost) {
-                    await updateDoc(ref, {
-                        "remainingTime": Math.ceil(this.state.remainingTime),
-                        "players.p1.x": me.x,
-                        "players.p1.y": me.y,
-                        "players.p1.hp": this.state.players.p1.hp,
-                        "players.p1.ult": Math.floor(this.state.players.p1.ult),
-                        "players.p1.slowUntil": this.state.players.p1.slowUntil,
-                        "players.p2.hp": this.state.players.p2.hp,
-                        "players.p2.ult": Math.floor(this.state.players.p2.ult),
-                        "players.p2.slowUntil": this.state.players.p2.slowUntil
-                    });
-                } else {
-                    await updateDoc(ref, {
-                        "players.p2.x": me.x,
-                        "players.p2.y": me.y
-                    });
+                    this.startGameAsHost();
                 }
-            } catch (e) {}
+            };
+            this.dc.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                this.handleMessage(msg);
+            };
         }
 
-        // --- Logic ---
+        sendMessage(msg) {
+            if (this.dc && this.dc.readyState === 'open') {
+                this.dc.send(JSON.stringify(msg));
+            }
+        }
+
+        handleMessage(msg) {
+            switch (msg.type) {
+                case 'sync': 
+                    this.state.remainingTime = msg.time;
+                    this.state.status = msg.status;
+                    Object.assign(this.state.players.p1, msg.p1);
+                    Object.assign(this.state.players.p2, msg.p2);
+                    if (msg.status === 'playing') {
+                        this.switchLayer(null);
+                        this.hud.classList.remove('hidden');
+                    } else if (msg.status === 'finished') {
+                        this.hud.classList.add('hidden');
+                        this.showResult(msg.winner);
+                    }
+                    this.updateUI();
+                    break;
+
+                case 'input': 
+                    const p2 = this.state.players.p2;
+                    p2.x = msg.x;
+                    p2.y = msg.y;
+                    p2.active = true;
+                    break;
+
+                case 'shoot':
+                    if (msg.shooter !== this.myId) {
+                        this.spawnBulletLocal(msg.shooter, msg.isUlt, msg.angle);
+                    }
+                    break;
+                
+                case 'restart':
+                    this.resetLocalState();
+                    if(this.isHost) this.startGameAsHost();
+                    break;
+                
+                case 'close':
+                    alert('Room closed.');
+                    location.reload();
+                    break;
+            }
+        }
+
+        startGameAsHost() {
+            this.state.status = "playing";
+            this.state.remainingTime = GAME_DURATION;
+            this.state.players.p2.active = true;
+            this.switchLayer(null);
+            this.hud.classList.remove('hidden');
+        }
 
         tryFire(angle) {
-            if (this.myAmmo <= 0) return; // 弾切れ
+            if (this.myAmmo <= 0) return;
             const now = Date.now();
             if (now - this.lastFireTime < FIRE_RATE) return;
 
@@ -697,7 +656,7 @@
             this.myAmmo--; 
 
             this.spawnBulletLocal(this.myId, false, angle);
-            this.sendFireEvent(false, angle);
+            this.sendMessage({ type: 'shoot', shooter: this.myId, isUlt: false, angle: angle });
         }
 
         triggerUlt() {
@@ -706,9 +665,8 @@
             if (me.ult < ULT_MAX) return;
 
             this.ultLocked = true;
-            me.ult = 0; // Local immediate update
+            me.ult = 0; 
             
-            // オートエイム計算
             const targetId = (this.myId === 'p1') ? 'p2' : 'p1';
             const target = this.state.players[targetId];
             let angle = 0;
@@ -719,35 +677,14 @@
             }
 
             this.spawnBulletLocal(this.myId, true, angle);
-            this.sendFireEvent(true, angle);
+            this.sendMessage({ type: 'shoot', shooter: this.myId, isUlt: true, angle: angle });
 
-            // Cooldown lock
             setTimeout(() => { this.ultLocked = false; }, 500);
-        }
-
-        async sendFireEvent(isUlt, angle) {
-            const ref = doc(db, "rooms", this.roomId);
-            try {
-                if (isUlt) {
-                    await updateDoc(ref, { 
-                        ultSeq: increment(1), 
-                        lastShooter: this.myId, 
-                        lastAngle: angle,
-                        [`players.${this.myId}.ult`]: 0 // Reset Firestore ULT
-                    });
-                } else {
-                    await updateDoc(ref, { bulletSeq: increment(1), lastShooter: this.myId, lastAngle: angle });
-                }
-            } catch(e) {}
-        }
-
-        spawnBulletFromSync(shooterId, isUlt, angle) {
-            this.spawnBulletLocal(shooterId, isUlt, angle);
         }
 
         spawnBulletLocal(ownerId, isUlt, angle) {
             const p = this.state.players[ownerId];
-            if (!p || !p.active) return;
+            if (!p) return;
 
             if (isNaN(p.x) || isNaN(p.y)) return;
 
@@ -762,7 +699,6 @@
                 r: isUlt ? ULT_RADIUS : BULLET_RADIUS
             });
 
-            // Effect
             for(let i=0; i<5; i++){
                 this.particles.push({
                     x: p.x + Math.cos(angle)*20, 
@@ -778,24 +714,29 @@
             else this.playShootSound();
         }
 
-        // --- Loop ---
-
         update(dt) {
             const now = Date.now();
             const deltaTimeSec = (now - this.lastFrameTime) / 1000;
             this.lastFrameTime = now;
 
-            // Timer
-            if (this.state.status === "playing" && this.state.startTime) {
-                const elapsed = (now - this.state.startTime) / 1000;
-                this.state.remainingTime = Math.max(0, GAME_DURATION - elapsed);
-                if (this.isHost && this.state.remainingTime <= 0) {
-                    this.checkTimeOver();
-                }
-            }
-
             if (this.state.status === "playing") {
-                // Ammo Reload
+                if (this.isHost) {
+                    if (now - this.lastTimeTick > 1000) {
+                        this.state.remainingTime -= 1;
+                        this.lastTimeTick = now;
+                        if (this.state.remainingTime <= 0) {
+                            this.checkTimeOver();
+                        }
+                    }
+                    ['p1', 'p2'].forEach(pid => {
+                        const p = this.state.players[pid];
+                        if (p.active && p.ult < ULT_MAX) {
+                            p.ult += ULT_CHARGE_PASSIVE * deltaTimeSec;
+                            if (p.ult > ULT_MAX) p.ult = ULT_MAX;
+                        }
+                    });
+                }
+
                 if (this.myAmmo < AMMO_MAX) {
                     this.ammoTimer += (deltaTimeSec * 1000);
                     if (this.ammoTimer >= AMMO_RELOAD_TIME) {
@@ -806,18 +747,6 @@
                     this.ammoTimer = 0;
                 }
 
-                // Host Logic
-                if (this.isHost) {
-                    ['p1', 'p2'].forEach(pid => {
-                        const p = this.state.players[pid];
-                        if (p.active && p.ult < ULT_MAX) {
-                            p.ult += ULT_CHARGE_PASSIVE * deltaTimeSec;
-                            if (p.ult > ULT_MAX) p.ult = ULT_MAX;
-                        }
-                    });
-                }
-
-                // Movement
                 const me = this.state.players[this.myId];
                 if (me) {
                     let speed = MOVE_SPEED;
@@ -836,15 +765,31 @@
                     me.x = Math.max(20, Math.min(this.canvas.width - 20, me.x));
                     me.y = Math.max(20, Math.min(this.canvas.height - 20, me.y));
                 }
+
+                if (this.connected) {
+                    if (this.isHost) {
+                        this.sendMessage({
+                            type: 'sync',
+                            time: this.state.remainingTime,
+                            status: this.state.status,
+                            p1: this.state.players.p1,
+                            p2: this.state.players.p2,
+                            winner: this.state.winner
+                        });
+                        this.updateUI();
+                    } else {
+                        const me = this.state.players.p2;
+                        this.sendMessage({
+                            type: 'input',
+                            x: me.x,
+                            y: me.y
+                        });
+                    }
+                }
             }
 
             this.updateBullets();
             this.updateParticles();
-
-            if (now - this.lastSyncTime > SYNC_INTERVAL) {
-                this.syncToFirestore();
-                this.lastSyncTime = now;
-            }
         }
 
         updateBullets() {
@@ -870,14 +815,12 @@
                         hit = true; 
                         this.playHitSound();
                         
-                        // Host Only Logic
                         if (this.isHost) {
                             const dmg = b.isUlt ? 20 : 10;
                             target.hp -= dmg;
                             target.ult = Math.min(ULT_MAX, target.ult + ULT_CHARGE_HIT);
                             if (b.isUlt) target.slowUntil = Date.now() + 3000;
 
-                            // Knockback
                             const knockDist = KNOCKBACK_FORCE;
                             target.x += Math.cos(b.angle) * knockDist;
                             target.y += Math.sin(b.angle) * knockDist;
@@ -915,20 +858,22 @@
             this.endGame(winner);
         }
 
-        async endGame(winnerId) {
-            if (!this.isHost || this.state.status === "finished") return;
+        endGame(winnerId) {
             this.state.status = "finished";
-            
-            await updateDoc(doc(db, "rooms", this.roomId), {
-                "status": "finished",
-                "winner": winnerId,
-                "remainingTime": 0,
-                "players.p1.hp": this.state.players.p1.hp,
-                "players.p2.hp": this.state.players.p2.hp
-            });
+            this.state.winner = winnerId;
+            if (this.isHost) {
+                this.sendMessage({
+                    type: 'sync',
+                    time: 0,
+                    status: 'finished',
+                    p1: this.state.players.p1,
+                    p2: this.state.players.p2,
+                    winner: winnerId
+                });
+                this.showResult(winnerId);
+                this.hud.classList.add('hidden');
+            }
         }
-
-        // --- UI ---
 
         switchLayer(name) {
             for (let key in this.layers) {
@@ -1016,35 +961,28 @@
             }
         }
 
-        async restartGame() {
+        restartGame() {
             if (!this.isHost) return;
-            
-            const now = Date.now();
-            this.resetLocalState();
+            this.state.players.p1.hp = 100;
+            this.state.players.p1.x = 100;
+            this.state.players.p1.ult = 0;
+            this.state.players.p1.slowUntil = 0;
+            this.state.players.p2.hp = 100;
+            this.state.players.p2.x = this.canvas.width - 100;
+            this.state.players.p2.ult = 0;
+            this.state.players.p2.slowUntil = 0;
             this.state.remainingTime = GAME_DURATION;
-            this.state.startTime = now;
             this.state.status = "playing";
-
-            await updateDoc(doc(db, "rooms", this.roomId), {
-                "players.p1.hp": 100,
-                "players.p1.x": 100,
-                "players.p1.ult": 0,
-                "players.p2.hp": 100,
-                "players.p2.x": this.canvas.width - 100,
-                "players.p2.ult": 0,
-                "status": "playing",
-                "remainingTime": GAME_DURATION,
-                "startTime": now,
-                "winner": null
-            });
+            this.localBullets = []; 
+            this.sendMessage({ type: 'restart' });
+            this.switchLayer(null);
+            this.hud.classList.remove('hidden');
         }
 
-        async disbandRoom() {
+        disbandRoom() {
             if (!this.isHost) return;
-            try {
-                await updateDoc(doc(db, "rooms", this.roomId), { status: "closed" });
-                location.reload();
-            } catch (e) {}
+            this.sendMessage({ type: 'close' });
+            location.reload();
         }
 
         draw() {
@@ -1062,8 +1000,6 @@
 
             if (this.input.aim.active) {
                 this.drawStickKnob(this.stickRightBase, this.input.aim.angle);
-                
-                // Trajectory Line
                 const me = this.state.players[this.myId];
                 if (me && me.active) {
                     this.ctx.beginPath();
